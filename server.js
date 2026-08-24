@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(session({
-  secret: 'waffer-dev-secret-change-in-production',
+  secret: process.env.SESSION_SECRET || 'waffer-dev-secret-change-in-production',
   resave: false,
   saveUninitialized: false,
   cookie: { maxAge: 1000 * 60 * 60 * 24 * 7 }
@@ -96,7 +96,8 @@ app.get('/api/offers', (req, res) => {
   }
   const withMerchant = list.map(o => ({
     ...o,
-    merchantName: (data.merchants.find(m => m.id === o.merchantId) || {}).name || 'Unknown'
+    merchantName: (data.merchants.find(m => m.id === o.merchantId) || {}).name || 'Unknown',
+    merchantInitials: (data.merchants.find(m => m.id === o.merchantId) || {}).initials || '??'
   }));
   res.json({ offers: withMerchant });
 });
@@ -105,7 +106,7 @@ app.get('/api/offers/:id', (req, res) => {
   const offer = data.offers.find(o => o.id === Number(req.params.id));
   if (!offer) return res.status(404).json({ error: 'Offer not found.' });
   const merchant = data.merchants.find(m => m.id === offer.merchantId);
-  res.json({ offer: { ...offer, merchantName: merchant ? merchant.name : 'Unknown' } });
+  res.json({ offer: { ...offer, merchantName: merchant ? merchant.name : 'Unknown', merchantInitials: merchant ? merchant.initials : '??' } });
 });
 
 /* ---------- Vouchers ---------- */
