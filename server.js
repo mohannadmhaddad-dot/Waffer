@@ -1,6 +1,7 @@
 const express = require('express');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
@@ -8,6 +9,7 @@ const db = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const COMMISSION_RATE = 0.08;
 
 const uploadsDir = path.join(__dirname, 'public', 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
@@ -37,6 +39,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const data = db.load();
 
+/* ---------- Helpers ---------- */
 function genVoucherCode() {
   const id = db.nextId('voucher');
   const rand = Math.random().toString(36).substr(2, 4).toUpperCase();
@@ -45,6 +48,33 @@ function genVoucherCode() {
 
 function slugify(name) {
   return (name || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 20) || 'merchant';
+}
+
+function money(n) {
+  return Math.round(n * 100) / 100;
+}
+
+async function sendEmail(to, subject, html) {
+  if (!process.env.RESEND_API_KEY || !to) {
+    console.log('Email skipped (no RESEND_API_KEY or recipient):', subject, '->', to);
+    return;
+  }
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ from: 'Waffer <onboarding@resend.dev>', to: [to], subject, html })
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      console.log('Resend error:', res.status, text);
+    }
+  } catch (e) {
+    console.log('Email send failed:', e.message);
+  }
 }
 
 function currentUser(req) {
@@ -79,11 +109,15 @@ function requireMerchant(req, res, next) {
 }
 
 function publicUser(u) {
-  return { id: u.id, name: u.name, email: u.email, phone: u.phone, isAdmin: u.isAdmin };
+  return { id: u.id, name: u.name, email: u.email, phone: u.phone, gender: u.gender || null, birthday: u.birthday || null, isAdmin: u.isAdmin };
 }
 
 function publicMerchant(m) {
   return { id: m.id, name: m.name, category: m.category, contact: m.contact, username: m.username, logoUrl: m.logoUrl || null };
+}
+
+function originOf(req) {
+  return `${req.protocol}://${req.get('host')}`;
 }
 
 /* ---------- Customer auth ---------- */
@@ -98,7 +132,10 @@ app.post('/api/auth/register', (req, res) => {
   }
   const id = db.nextId('user');
   const passwordHash = bcrypt.hashSync(password, 8);
-  const user = { id, name, email, phone: fullPhone, passwordHash, isAdmin: false, createdAt: Date.now() };
+  const user = {
+    id, name, email, phone: fullPhone, passwordHash, isAdmin: false, createdAt: Date.now(),
+    gender: null, birthday: null, resetToken: null, resetTokenExpiry: null
+  };
   data.users.push(user);
 
   const claimEmail = email.toLowerCase();
@@ -141,6 +178,43 @@ app.get('/api/auth/me', (req, res) => {
   res.json({ user: user ? publicUser(user) : null });
 });
 
+app.patch('/api/auth/profile', requireAuth, (req, res) => {
+  const { name, phone, gender, birthday } = req.body;
+  if (name) req.user.name = name;
+  if (phone !== undefined) req.user.phone = phone;
+  if (gender !== undefined) req.user.gender = gender;
+  if (birthday !== undefined) req.user.birthday = birthday;
+  db.save();
+  res.json({ user: publicUser(req.user) });
+});
+
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  const user = data.users.find(u => u.email.toLowerCase() === (email || '').toLowerCase());
+  if (user) {
+    const token = crypto.randomBytes(24).toString('hex');
+    user.resetToken = token;
+    user.resetTokenExpiry = Date.now() + 60 * 60 * 1000;
+    db.save();
+    const link = `${originOf(req)}/?resetToken=${token}`;
+    await sendEmail(user.email, 'Reset your Waffer password',
+      `<p>Hi ${user.name},</p><p>Click the link below to reset your Waffer password. This link expires in 1 hour.</p><p><a href="${link}">${link}</a></p><p>If you didn't request this, you can ignore this email.</p>`);
+  }
+  res.json({ ok: true, message: 'If that email is registered, a reset link has been sent.' });
+});
+
+app.post('/api/auth/reset-password', (req, res) => {
+  const { token, newPassword } = req.body;
+  if (!token || !newPassword) return res.status(400).json({ error: 'Missing token or new password.' });
+  const user = data.users.find(u => u.resetToken === token && u.resetTokenExpiry && u.resetTokenExpiry > Date.now());
+  if (!user) return res.status(400).json({ error: 'This reset link is invalid or has expired.' });
+  user.passwordHash = bcrypt.hashSync(newPassword, 8);
+  user.resetToken = null;
+  user.resetTokenExpiry = null;
+  db.save();
+  res.json({ ok: true });
+});
+
 /* ---------- Merchant auth ---------- */
 app.post('/api/merchant/login', (req, res) => {
   const { username, password } = req.body;
@@ -160,6 +234,26 @@ app.post('/api/merchant/logout', (req, res) => {
 app.get('/api/merchant/me', (req, res) => {
   const merchant = currentMerchant(req);
   res.json({ merchant: merchant ? publicMerchant(merchant) : null });
+});
+
+app.get('/api/merchant/dashboard', requireMerchant, (req, res) => {
+  const myOffers = data.offers.filter(o => o.merchantId === req.merchant.id);
+  const myOfferIds = myOffers.map(o => o.id);
+  const myVouchers = data.vouchers.filter(v => myOfferIds.includes(v.offerId));
+  const sold = myVouchers.length;
+  const redeemed = myVouchers.filter(v => v.status === 'redeemed').length;
+  const revenue = money(myVouchers.reduce((a, v) => a + v.price, 0));
+  const commission = money(revenue * COMMISSION_RATE);
+  const payout = money(revenue - commission);
+  const offerBreakdown = myOffers.map(o => {
+    const ov = myVouchers.filter(v => v.offerId === o.id);
+    return { id: o.id, title: o.title, sold: ov.length, redeemed: ov.filter(v => v.status === 'redeemed').length, revenue: money(ov.length * o.price) };
+  });
+  const recent = myVouchers.map(v => {
+    const buyer = data.users.find(u => u.id === v.buyerId);
+    return { code: v.code, offerTitle: v.offerTitle, buyerName: buyer ? buyer.name : 'Unknown', price: v.price, status: v.status, createdAt: v.createdAt, redeemedAt: v.redeemedAt };
+  }).sort((a, b) => b.createdAt - a.createdAt).slice(0, 100);
+  res.json({ sold, redeemed, revenue, commission, payout, commissionRate: COMMISSION_RATE, offers: offerBreakdown, recent });
 });
 
 /* ---------- Offers (public read) ---------- */
@@ -188,25 +282,71 @@ app.get('/api/offers/:id', (req, res) => {
   res.json({ offer: { ...offer, merchantName: merchant.name || 'Unknown', merchantInitials: merchant.initials || '??', merchantLogoUrl: merchant.logoUrl || null } });
 });
 
-/* ---------- Vouchers ---------- */
-app.post('/api/vouchers/purchase', requireAuth, (req, res) => {
-  const { offerId } = req.body;
-  const offer = data.offers.find(o => o.id === Number(offerId));
-  if (!offer || offer.status !== 'Live') return res.status(400).json({ error: 'Offer is not available.' });
-  const code = genVoucherCode();
-  const voucher = {
-    id: code, code, offerId: offer.id, offerTitle: offer.title, price: offer.price,
-    merchantName: (data.merchants.find(m => m.id === offer.merchantId) || {}).name,
-    ownerId: req.user.id, buyerId: req.user.id, status: 'active',
-    giftedTo: null, recipientEmail: null, recipientPhone: null, createdAt: Date.now(), redeemedAt: null
-  };
-  data.vouchers.push(voucher);
-  offer.sold += 1;
-  db.save();
-  res.json({ voucher });
+/* ---------- AI offer finder ---------- */
+app.post('/api/ai/recommend', async (req, res) => {
+  const { query } = req.body;
+  if (!query || !query.trim()) return res.status(400).json({ error: "Tell us what you're looking for." });
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(503).json({ error: 'AI search is not configured yet.' });
+  }
+  const liveOffers = data.offers.filter(o => o.status === 'Live').map(o => {
+    const m = data.merchants.find(m => m.id === o.merchantId) || {};
+    return { id: o.id, title: o.title, category: o.category, merchant: m.name, price: o.price, original: o.original, terms: (o.terms || '').slice(0, 80) };
+  });
+  const prompt = `You are Waffer's offer-matching assistant for a Lebanese discount voucher marketplace. Given this list of live offers as JSON:\n${JSON.stringify(liveOffers)}\n\nA user says: "${query}"\n\nPick the single best matching offer id. Respond with ONLY compact JSON, no markdown formatting, no text outside the JSON: {"offerId": <id or null>, "message": "<one short friendly sentence>"}. If nothing matches well, set offerId to null and briefly suggest what categories are available instead.`;
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    const json = await resp.json();
+    if (json.error) return res.status(502).json({ error: 'AI search failed: ' + json.error.message });
+    let text = (json.content && json.content[0] && json.content[0].text) || '{}';
+    text = text.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```$/, '').trim();
+    let parsed;
+    try { parsed = JSON.parse(text); } catch { parsed = { offerId: null, message: "I couldn't quite match that — try browsing by category instead." }; }
+    const matched = liveOffers.find(o => o.id === parsed.offerId);
+    res.json({ offerId: matched ? matched.id : null, message: parsed.message || '' });
+  } catch (e) {
+    res.status(502).json({ error: 'AI search failed. Try again in a moment.' });
+  }
 });
 
-app.post('/api/vouchers/gift', requireAuth, (req, res) => {
+/* ---------- Vouchers ---------- */
+app.post('/api/vouchers/purchase', requireAuth, (req, res) => {
+  const { offerId, quantity } = req.body;
+  const qty = Math.max(1, Math.min(20, Number(quantity) || 1));
+  const offer = data.offers.find(o => o.id === Number(offerId));
+  if (!offer || offer.status !== 'Live') return res.status(400).json({ error: 'Offer is not available.' });
+  const merchant = data.merchants.find(m => m.id === offer.merchantId) || {};
+  const discountPct = Math.round((1 - offer.price / offer.original) * 100);
+  const vouchers = [];
+  for (let i = 0; i < qty; i++) {
+    const code = genVoucherCode();
+    const voucher = {
+      id: code, code, offerId: offer.id, offerTitle: offer.title, price: offer.price, original: offer.original,
+      merchantName: merchant.name, discountPct, expiryDate: offer.expiryDate || null,
+      ownerId: req.user.id, buyerId: req.user.id, status: 'active',
+      giftedTo: null, recipientEmail: null, recipientPhone: null, createdAt: Date.now(), redeemedAt: null
+    };
+    data.vouchers.push(voucher);
+    vouchers.push(voucher);
+  }
+  offer.sold += qty;
+  db.save();
+  res.json({ vouchers, total: money(offer.price * qty) });
+});
+
+app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
   const { offerId, recipientEmail, recipientPhone, message } = req.body;
   const offer = data.offers.find(o => o.id === Number(offerId));
   if (!offer || offer.status !== 'Live') return res.status(400).json({ error: 'Offer is not available.' });
@@ -222,10 +362,12 @@ app.post('/api/vouchers/gift', requireAuth, (req, res) => {
     return res.status(400).json({ error: "You can't gift a voucher to yourself." });
   }
 
+  const merchant = data.merchants.find(m => m.id === offer.merchantId) || {};
+  const discountPct = Math.round((1 - offer.price / offer.original) * 100);
   const code = genVoucherCode();
   const voucher = {
-    id: code, code, offerId: offer.id, offerTitle: offer.title, price: offer.price,
-    merchantName: (data.merchants.find(m => m.id === offer.merchantId) || {}).name,
+    id: code, code, offerId: offer.id, offerTitle: offer.title, price: offer.price, original: offer.original,
+    merchantName: merchant.name, discountPct, expiryDate: offer.expiryDate || null,
     ownerId: recipient ? recipient.id : null,
     buyerId: req.user.id,
     status: recipient ? 'active' : 'pending-claim',
@@ -237,6 +379,15 @@ app.post('/api/vouchers/gift', requireAuth, (req, res) => {
   data.vouchers.push(voucher);
   offer.sold += 1;
   db.save();
+
+  if (recipient && recipient.email) {
+    sendEmail(recipient.email, 'You received a Waffer gift!',
+      `<p>Hi ${recipient.name},</p><p>${req.user.name} sent you a voucher: <strong>${offer.title}</strong> from ${voucher.merchantName}.</p><p>Your code: <strong>${code}</strong></p><p>Find it in your Waffer wallet.</p>`);
+  } else if (email) {
+    sendEmail(email, "You've received a gift on Waffer!",
+      `<p>${req.user.name} sent you a voucher: <strong>${offer.title}</strong> from ${voucher.merchantName}.</p><p>Create a free Waffer account using this email address to claim it:</p><p><a href="${originOf(req)}">${originOf(req)}</a></p>`);
+  }
+
   res.json({ voucher, claimed: !!recipient, recipientName: recipient ? recipient.name : null });
 });
 
@@ -321,8 +472,29 @@ app.get('/api/admin/offers', requireAdmin, (req, res) => {
   res.json({ offers: withMerchant });
 });
 
+app.get('/api/admin/offers/:id/detail', requireAdmin, (req, res) => {
+  const offer = data.offers.find(o => o.id === Number(req.params.id));
+  if (!offer) return res.status(404).json({ error: 'Offer not found.' });
+  const merchant = data.merchants.find(m => m.id === offer.merchantId) || {};
+  const vouchers = data.vouchers.filter(v => v.offerId === offer.id);
+  const sold = vouchers.length;
+  const redeemed = vouchers.filter(v => v.status === 'redeemed').length;
+  const revenue = money(vouchers.reduce((a, v) => a + v.price, 0));
+  const commission = money(revenue * COMMISSION_RATE);
+  const payout = money(revenue - commission);
+  const buyerRows = vouchers.map(v => {
+    const buyer = data.users.find(u => u.id === v.buyerId);
+    return {
+      code: v.code, buyerName: buyer ? buyer.name : 'Unknown', buyerEmail: buyer ? buyer.email : '',
+      status: v.status, createdAt: v.createdAt, redeemedAt: v.redeemedAt,
+      isGift: !!v.giftedTo || !!v.recipientEmail || !!v.recipientPhone
+    };
+  }).sort((a, b) => b.createdAt - a.createdAt);
+  res.json({ offer, merchantName: merchant.name, sold, redeemed, revenue, commission, payout, commissionRate: COMMISSION_RATE, vouchers: buyerRows });
+});
+
 app.post('/api/admin/offers', requireAdmin, (req, res) => {
-  const { merchantId, title, category, original, price, terms } = req.body;
+  const { merchantId, title, category, original, price, terms, expiryDate } = req.body;
   if (!merchantId || !title || !price) return res.status(400).json({ error: 'Merchant, title and price are required.' });
   const merchant = data.merchants.find(m => m.id === Number(merchantId));
   if (!merchant) return res.status(400).json({ error: 'Merchant not found.' });
@@ -330,9 +502,24 @@ app.post('/api/admin/offers', requireAdmin, (req, res) => {
   const offer = {
     id, merchantId: merchant.id, title, category: category || merchant.category,
     original: Number(original) || Number(price), price: Number(price),
-    sold: 0, status: 'Live', terms: terms || 'Terms to be confirmed with merchant.'
+    sold: 0, status: 'Live', terms: terms || 'Terms to be confirmed with merchant.',
+    expiryDate: expiryDate || null
   };
   data.offers.push(offer);
+  db.save();
+  res.json({ offer });
+});
+
+app.patch('/api/admin/offers/:id', requireAdmin, (req, res) => {
+  const offer = data.offers.find(o => o.id === Number(req.params.id));
+  if (!offer) return res.status(404).json({ error: 'Offer not found.' });
+  const { title, category, original, price, terms, expiryDate } = req.body;
+  if (title) offer.title = title;
+  if (category) offer.category = category;
+  if (original) offer.original = Number(original);
+  if (price) offer.price = Number(price);
+  if (terms) offer.terms = terms;
+  if (expiryDate !== undefined) offer.expiryDate = expiryDate || null;
   db.save();
   res.json({ offer });
 });
