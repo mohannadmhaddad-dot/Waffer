@@ -45,6 +45,8 @@ main{padding:28px 0 60px;}
 .offer-thumb{height:106px;background:var(--brand-light);display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;}
 .offer-thumb img.merchant-logo{width:100%;height:100%;object-fit:contain;padding:14px;background:#fff;}
 .thumb-icon{width:38px;height:38px;color:var(--brand);}
+.mini-logo{width:32px;height:32px;border-radius:6px;object-fit:contain;background:var(--bg);border:1px solid var(--border);}
+.mini-logo-placeholder{width:32px;height:32px;border-radius:6px;background:var(--brand-light);color:var(--brand-dark);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;}
 .thumb-badge{
   position:absolute;bottom:8px;right:8px;width:26px;height:26px;border-radius:50%;background:var(--card);
   border:1px solid var(--border);color:var(--text);display:flex;align-items:center;justify-content:center;
