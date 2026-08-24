@@ -48,7 +48,15 @@ main{padding:28px 0 60px;}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:18px;}
 .offer-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;box-shadow:var(--shadow);display:flex;flex-direction:column;transition:transform 0.15s, box-shadow 0.15s;}
 .offer-card:hover{transform:translateY(-3px);box-shadow:0 8px 20px rgba(22,36,31,0.14);}
-.offer-thumb{height:106px;background:linear-gradient(135deg,var(--pine-light),var(--pine));display:flex;align-items:center;justify-content:center;color:var(--gold);font-size:32px;position:relative;}
+.offer-thumb{height:106px;background:linear-gradient(135deg,var(--pine-light),var(--pine));display:flex;align-items:center;justify-content:center;position:relative;}
+.offer-thumb.cat-res{background:linear-gradient(135deg,#B85236,var(--brick));}
+.offer-thumb.cat-spa{background:linear-gradient(135deg,#5C7D6B,#3C5747);}
+.offer-thumb.cat-med{background:linear-gradient(135deg,#4A6C86,#324B5F);}
+.thumb-badge{
+  width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,0.12);
+  border:1.5px dashed var(--gold);color:var(--gold);display:flex;align-items:center;justify-content:center;
+  font-family:var(--font-display);font-weight:700;font-size:17px;letter-spacing:0.02em;
+}
 .offer-thumb::after{
   content:"";position:absolute;left:0;right:0;bottom:-1px;height:8px;
   background-image:radial-gradient(circle at 8px 0, var(--card) 6px, transparent 6.5px);
@@ -114,4 +122,6 @@ td{padding:10px;border-bottom:1px solid var(--border);}
 @media (max-width:520px){.two-col{grid-template-columns:1fr;}}
 .note{font-size:12px;color:var(--muted);margin-top:8px;}
 .lean-note{background:#FAEEDA;border:1px solid #F0D9A6;color:#7A5A16;padding:12px 16px;border-radius:10px;font-size:13px;margin-bottom:22px;}
+.demo-banner{background:var(--ink);color:var(--paper-2);text-align:center;font-size:12.5px;padding:7px 16px;letter-spacing:0.2px;}
+.demo-banner strong{color:var(--gold);}
 footer{text-align:center;padding:24px;color:var(--muted);font-size:12px;border-top:1px solid var(--border);}
