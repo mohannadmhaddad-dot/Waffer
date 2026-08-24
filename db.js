@@ -12,10 +12,16 @@ function seed() {
   const mh = MERCHANT_DEFAULT_PASSWORD_HASH;
   const defaultExpiry = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
-  const baseUser = { gender: null, birthday: null, resetToken: null, resetTokenExpiry: null };
+  const baseUser = { gender: null, birthday: null, resetToken: null, resetTokenExpiry: null, emailVerified: true, verifyToken: null };
 
   return {
-    nextIds: { user: 4, merchant: 25, offer: 25, voucher: 1000 },
+    nextIds: { user: 4, merchant: 25, offer: 25, voucher: 1000, category: 5 },
+    categories: [
+      { id: 1, name: 'Entertainment' },
+      { id: 2, name: 'Restaurants' },
+      { id: 3, name: 'Spa & Beauty' },
+      { id: 4, name: 'Medical Checkups' },
+    ],
     users: [
       { id: 1, name: 'Waffer Admin', email: 'admin@waffer.com', phone: null, passwordHash: adminHash, isAdmin: true, createdAt: Date.now(), ...baseUser },
       { id: 2, name: 'Layla Khoury', email: 'layla@example.com', phone: '+96170123456', passwordHash: laylaHash, isAdmin: false, createdAt: Date.now(), ...baseUser },
