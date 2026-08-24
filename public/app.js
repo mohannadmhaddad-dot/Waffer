@@ -369,9 +369,18 @@ async function renderAdmin() {
   document.getElementById('aRedeemed').textContent = stats.redeemed;
 
   const { merchants } = await api('/api/admin/merchants');
-  document.getElementById('adminMerchantTable').innerHTML = merchants.map(m =>
-    `<tr><td>${m.name}</td><td>${m.category}</td><td>${m.username || '—'}</td><td>${m.logoUrl ? 'Yes' : 'Default icon'}</td></tr>`
-  ).join('') || `<tr><td colspan="4" class="empty">No merchants yet.</td></tr>`;
+  document.getElementById('adminMerchantTable').innerHTML = merchants.map(m => `
+    <tr>
+      <td>${m.logoUrl ? `<img class="mini-logo" src="${m.logoUrl}" alt="" />` : `<div class="mini-logo-placeholder">${m.initials || '??'}</div>`}</td>
+      <td>${m.name}</td>
+      <td>${m.category}</td>
+      <td>${m.username || '—'}</td>
+      <td>
+        <input type="file" accept="image/*" style="display:none" id="logoFile-${m.id}" onchange="uploadLogo(${m.id}, this)" />
+        <button class="row-btn" onclick="document.getElementById('logoFile-${m.id}').click()">Upload logo</button>
+      </td>
+    </tr>
+  `).join('') || `<tr><td colspan="5" class="empty">No merchants yet.</td></tr>`;
 
   const { offers } = await api('/api/admin/offers');
   document.getElementById('adminOfferTable').innerHTML = offers.map(o => `
@@ -385,6 +394,26 @@ async function renderAdmin() {
 async function toggleOfferStatus(id) {
   await api(`/api/admin/offers/${id}/toggle`, { method: 'PATCH' });
   renderAdmin();
+}
+
+async function uploadLogo(merchantId, input) {
+  const file = input.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('logo', file);
+  try {
+    const res = await fetch(`/api/admin/merchants/${merchantId}/logo-upload`, {
+      method: 'POST',
+      credentials: 'include',
+      body: formData
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || 'Upload failed.');
+    renderAdmin();
+    renderOffers();
+  } catch (e) {
+    alert(e.message);
+  }
 }
 
 async function createMerchant() {
