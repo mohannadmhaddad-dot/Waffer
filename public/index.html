@@ -4,10 +4,10 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Waffer — Discount Vouchers</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Ccircle cx='20' cy='20' r='19' fill='%231F3A34'/%3E%3Ccircle cx='20' cy='20' r='14.5' fill='none' stroke='%23C69A3E' stroke-width='1.4' stroke-dasharray='2 2.6'/%3E%3Ctext x='20' y='27' text-anchor='middle' font-family='Georgia,serif' font-size='18' font-weight='700' fill='%23C69A3E'%3EW%3C/text%3E%3C/svg%3E" />
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Ccircle cx='20' cy='20' r='19' fill='%2300A86B'/%3E%3Ctext x='20' y='27' text-anchor='middle' font-family='Arial,sans-serif' font-size='18' font-weight='700' fill='%23FFFFFF'%3EW%3C/text%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -17,11 +17,9 @@
 <header class="topbar">
   <div class="topbar-inner">
     <div class="logo">
-      <svg class="logo-mark" width="34" height="40" viewBox="0 0 40 46" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <path d="M9 29 L9 42 L20 36.5 L31 42 L31 29 Z" fill="var(--gold)"/>
-        <circle cx="20" cy="18" r="18" fill="var(--pine)"/>
-        <circle cx="20" cy="18" r="13.5" fill="none" stroke="var(--gold)" stroke-width="1.4" stroke-dasharray="2 2.6"/>
-        <text x="20" y="25" text-anchor="middle" font-family="Georgia, serif" font-size="17" font-weight="700" fill="var(--gold)">W</text>
+      <svg class="logo-mark" width="32" height="32" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <circle cx="20" cy="20" r="19" fill="#FFFFFF" fill-opacity="0.15"/>
+        <text x="20" y="27" text-anchor="middle" font-family="Arial, sans-serif" font-size="17" font-weight="800" fill="#FFFFFF">W</text>
       </svg>
       <span class="logo-word">Waffer</span>
     </div>
@@ -40,7 +38,7 @@
   <section class="view active" id="view-customer">
     <div class="hero">
       <h1>Save on nights out and dining</h1>
-      <p>Discounted vouchers for entertainment and restaurants across Lebanon. Buy for yourself, or send one as a gift to a friend who already has an account.</p>
+      <p>Discounted vouchers for entertainment, dining, spa and medical checkups across Lebanon. Buy for yourself, or send one as a gift.</p>
       <div class="search-row">
         <input id="searchInput" placeholder="Search offers, e.g. cinema, sushi..." />
         <button onclick="renderOffers()">Search</button>
@@ -53,22 +51,38 @@
   <section class="view" id="view-wallet">
     <h2>My vouchers</h2>
     <div id="walletList"></div>
+    <h2 style="margin-top:32px;">Gifts you've sent</h2>
+    <div id="sentList"></div>
   </section>
 
   <section class="view" id="view-merchant">
-    <h2>Redeem a voucher</h2>
-    <div class="lean-note">Shared code checker for merchants at the till — no login required for this MVP. In production this would sit behind a simple merchant PIN.</div>
-    <div class="panel">
-      <div class="two-col">
-        <div class="field" style="margin-bottom:0;">
-          <label>Voucher code</label>
-          <input id="redeemInput" placeholder="e.g. WQ-8F2K91" />
-        </div>
-        <div style="display:flex;align-items:flex-end;">
-          <button class="btn btn-primary" style="height:41px;" onclick="redeemVoucher()">Verify &amp; redeem</button>
-        </div>
+    <div id="merchantLoggedOut">
+      <h2>Merchant login</h2>
+      <div class="lean-note">This area is private to your business. Log in with the username and password provided when your account was created.</div>
+      <div class="panel" style="max-width:420px;">
+        <div class="field"><label>Username</label><input id="merUsername" placeholder="e.g. grandcinemas" /></div>
+        <div class="field"><label>Password</label><input id="merPassword" type="password" placeholder="••••••••" /></div>
+        <div class="inline-notice" id="merLoginNotice"></div>
+        <button class="btn btn-primary btn-block" onclick="doMerchantLogin()">Log in</button>
+        <p class="note">Demo: any username from the merchant list (e.g. grandcinemas, emsherif, kimantraspas) / password merchant123</p>
       </div>
-      <div class="inline-notice" id="redeemNotice"></div>
+    </div>
+    <div id="merchantLoggedIn" style="display:none;">
+      <h2>Redeem a voucher</h2>
+      <p class="note" id="merchantWelcome" style="margin-bottom:18px;"></p>
+      <div class="panel">
+        <div class="two-col">
+          <div class="field" style="margin-bottom:0;">
+            <label>Voucher code</label>
+            <input id="redeemInput" placeholder="e.g. WQ-8F2K91" />
+          </div>
+          <div style="display:flex;align-items:flex-end;">
+            <button class="btn btn-primary" style="height:41px;" onclick="redeemVoucher()">Verify &amp; redeem</button>
+          </div>
+        </div>
+        <div class="inline-notice" id="redeemNotice"></div>
+      </div>
+      <button class="btn btn-secondary" onclick="doMerchantLogout()">Log out</button>
     </div>
   </section>
 
@@ -82,7 +96,7 @@
     </div>
     <div class="panel">
       <div class="panel-head"><h3 style="margin:0;">Merchants</h3><button class="btn btn-primary" onclick="openModal('newMerchantModal')">+ Add merchant</button></div>
-      <table><thead><tr><th>Business</th><th>Category</th><th>Contact</th></tr></thead><tbody id="adminMerchantTable"></tbody></table>
+      <table><thead><tr><th>Business</th><th>Category</th><th>Username</th><th>Logo</th></tr></thead><tbody id="adminMerchantTable"></tbody></table>
     </div>
     <div class="panel">
       <div class="panel-head"><h3 style="margin:0;">Offers</h3><button class="btn btn-primary" onclick="openNewOfferModal()">+ Create offer</button></div>
@@ -112,7 +126,13 @@
     <div id="registerForm" style="display:none;">
       <div class="field"><label>Full name</label><input id="regName" /></div>
       <div class="field"><label>Email</label><input id="regEmail" /></div>
-      <div class="field"><label>Phone (optional)</label><input id="regPhone" placeholder="+961 ..." /></div>
+      <div class="field">
+        <label>Mobile number</label>
+        <div class="phone-row">
+          <select id="regCountryCode"></select>
+          <input id="regPhone" placeholder="70 123 456" />
+        </div>
+      </div>
       <div class="field"><label>Password</label><input id="regPassword" type="password" /></div>
       <div class="inline-notice" id="registerNotice"></div>
       <button class="btn btn-primary btn-block" onclick="doRegister()">Create account</button>
@@ -142,11 +162,12 @@
     <button class="modal-close" onclick="closeModal('giftModal')">&times;</button>
     <h3>Send as a gift</h3>
     <div id="giftSummary" style="margin-bottom:14px;font-size:14px;color:var(--muted);"></div>
-    <div class="field"><label>Recipient's phone or email</label><input id="giftContact" placeholder="Must be a registered Waffer account" /></div>
+    <div class="field"><label>Recipient's email</label><input id="giftEmail" placeholder="friend@example.com" /></div>
+    <div class="field"><label>Recipient's phone</label><input id="giftPhone" placeholder="+961 71 234 567" /></div>
     <div class="field"><label>Message (optional)</label><textarea id="giftMessage" placeholder="Happy birthday!"></textarea></div>
     <div class="inline-notice" id="giftNotice"></div>
     <button class="btn btn-primary btn-block" onclick="completeGift()">Send gift</button>
-    <p class="note">Try: karim@example.com or layla@example.com (both registered demo accounts)</p>
+    <p class="note">Fill in at least one. If they don't have a Waffer account yet, we'll prompt them to sign up to claim it.</p>
   </div>
 </div>
 
@@ -169,6 +190,7 @@
     <div class="field"><label>Business name</label><input id="nmName" /></div>
     <div class="field"><label>Category</label><select id="nmCategory"><option>Entertainment</option><option>Restaurants</option><option>Spa &amp; Beauty</option><option>Medical Checkups</option></select></div>
     <div class="field"><label>WhatsApp / contact</label><input id="nmContact" placeholder="+961 XX XXX XXX" /></div>
+    <div class="field"><label>Logo URL (optional)</label><input id="nmLogoUrl" placeholder="https://... (paste once the merchant provides one)" /></div>
     <div class="inline-notice" id="merchantNotice"></div>
     <button class="btn btn-primary btn-block" onclick="createMerchant()">Add merchant</button>
   </div>
