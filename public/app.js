@@ -17,6 +17,7 @@ let currentUser = null;
 let currentMerchant = null;
 let currentOffer = null;
 let activeCategory = "All";
+let purchaseQty = 1;
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -29,6 +30,8 @@ async function api(path, opts = {}) {
   if (!res.ok) throw new Error(json.error || 'Something went wrong.');
   return json;
 }
+
+function esc(s) { return String(s == null ? '' : s).replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
 
 function openModal(id) { document.getElementById(id).classList.add('active'); }
 function closeModal(id) { document.getElementById(id).classList.remove('active'); }
@@ -44,12 +47,55 @@ function clearNotice(id) {
   el.textContent = '';
 }
 
+function fmtDate(ts) {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 /* ---------- Customer auth ---------- */
 function setAuthTab(tab) {
   document.querySelectorAll('#authTabs button').forEach(b => b.classList.remove('active'));
-  document.querySelector(`[data-authtab="${tab}"]`).classList.add('active');
+  const tabBtn = document.querySelector(`[data-authtab="${tab}"]`);
+  if (tabBtn) tabBtn.classList.add('active');
   document.getElementById('loginForm').style.display = tab === 'login' ? 'block' : 'none';
   document.getElementById('registerForm').style.display = tab === 'register' ? 'block' : 'none';
+  document.getElementById('forgotForm').style.display = 'none';
+}
+
+function showForgotForm() {
+  document.getElementById('loginForm').style.display = 'none';
+  document.getElementById('registerForm').style.display = 'none';
+  document.getElementById('forgotForm').style.display = 'block';
+  document.querySelectorAll('#authTabs button').forEach(b => b.classList.remove('active'));
+}
+
+async function doForgotPassword() {
+  clearNotice('forgotNotice');
+  const email = document.getElementById('forgotEmail').value.trim();
+  if (!email) { showNotice('forgotNotice', 'Enter your email.', 'error'); return; }
+  try {
+    const { message } = await api('/api/auth/forgot-password', { method: 'POST', body: { email } });
+    showNotice('forgotNotice', message, 'success');
+  } catch (e) {
+    showNotice('forgotNotice', e.message, 'error');
+  }
+}
+
+async function doResetPassword() {
+  clearNotice('resetNotice');
+  const token = window.__resetToken;
+  const newPassword = document.getElementById('resetNewPassword').value;
+  if (!newPassword || newPassword.length < 6) { showNotice('resetNotice', 'Enter a new password (at least 6 characters).', 'error'); return; }
+  try {
+    await api('/api/auth/reset-password', { method: 'POST', body: { token, newPassword } });
+    closeModal('resetPasswordModal');
+    alert('Password updated. You can log in with your new password now.');
+    openModal('authModal');
+    setAuthTab('login');
+    history.replaceState({}, '', location.pathname);
+  } catch (e) {
+    showNotice('resetNotice', e.message, 'error');
+  }
 }
 
 function populateCountryCodes() {
@@ -68,7 +114,7 @@ function renderAuthArea() {
   const walletBtn = document.getElementById('walletNavBtn');
   const adminBtn = document.getElementById('adminNavBtn');
   if (currentUser) {
-    el.innerHTML = `<span class="user-pill">Hi, ${currentUser.name.split(' ')[0]}</span><button onclick="doLogout()">Log out</button>`;
+    el.innerHTML = `<button class="user-pill-btn" onclick="openProfile()">Hi, ${currentUser.name.split(' ')[0]}</button><button onclick="doLogout()">Log out</button>`;
     walletBtn.style.display = 'inline-block';
     adminBtn.style.display = currentUser.isAdmin ? 'inline-block' : 'none';
   } else {
@@ -121,6 +167,33 @@ async function doLogout() {
   switchView('customer');
 }
 
+/* ---------- Profile ---------- */
+function openProfile() {
+  document.getElementById('profName').value = currentUser.name || '';
+  document.getElementById('profEmail').value = currentUser.email || '';
+  document.getElementById('profPhone').value = currentUser.phone || '';
+  document.getElementById('profGender').value = currentUser.gender || '';
+  document.getElementById('profBirthday').value = currentUser.birthday || '';
+  clearNotice('profileNotice');
+  openModal('profileModal');
+}
+
+async function saveProfile() {
+  clearNotice('profileNotice');
+  const name = document.getElementById('profName').value.trim();
+  const phone = document.getElementById('profPhone').value.trim();
+  const gender = document.getElementById('profGender').value;
+  const birthday = document.getElementById('profBirthday').value;
+  try {
+    const { user } = await api('/api/auth/profile', { method: 'PATCH', body: { name, phone, gender, birthday } });
+    currentUser = user;
+    renderAuthArea();
+    showNotice('profileNotice', 'Saved.', 'success');
+  } catch (e) {
+    showNotice('profileNotice', e.message, 'error');
+  }
+}
+
 /* ---------- Merchant auth ---------- */
 async function refreshMerchantAuth() {
   const { merchant } = await api('/api/merchant/me');
@@ -134,10 +207,30 @@ function renderMerchantArea() {
   if (currentMerchant) {
     loggedOut.style.display = 'none';
     loggedIn.style.display = 'block';
-    document.getElementById('merchantWelcome').textContent = `Logged in as ${currentMerchant.name}. Codes verified here only redeem vouchers for your business.`;
+    document.getElementById('merchantDashTitle').textContent = currentMerchant.name + ' — Dashboard';
+    loadMerchantDashboard();
   } else {
     loggedOut.style.display = 'block';
     loggedIn.style.display = 'none';
+  }
+}
+
+async function loadMerchantDashboard() {
+  try {
+    const d = await api('/api/merchant/dashboard');
+    document.getElementById('mdSold').textContent = d.sold;
+    document.getElementById('mdRedeemed').textContent = d.redeemed;
+    document.getElementById('mdRevenue').textContent = '$' + d.revenue;
+    document.getElementById('mdPayout').textContent = '$' + d.payout;
+    document.getElementById('mdCommissionNote').textContent = `Waffer commission (${Math.round(d.commissionRate * 100)}%): $${d.commission} deducted from sales volume.`;
+    document.getElementById('mdOffersTable').innerHTML = d.offers.map(o =>
+      `<tr><td>${o.title}</td><td>${o.sold}</td><td>${o.redeemed}</td><td>$${o.revenue}</td></tr>`
+    ).join('') || `<tr><td colspan="4" class="empty">No offers yet.</td></tr>`;
+    document.getElementById('mdRecentTable').innerHTML = d.recent.map(v =>
+      `<tr><td class="voucher-code">${v.code}</td><td>${v.buyerName}</td><td>$${v.price}</td><td><span class="status-pill status-${v.status}">${v.status}</span></td><td>${fmtDate(v.createdAt)}</td></tr>`
+    ).join('') || `<tr><td colspan="5" class="empty">No sales yet.</td></tr>`;
+  } catch (e) {
+    console.log('dashboard load failed', e.message);
   }
 }
 
@@ -167,6 +260,7 @@ function switchView(view) {
   if (navBtn) navBtn.classList.add('active');
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById('view-' + view).classList.add('active');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
   if (view === 'wallet') renderWallet();
   if (view === 'admin') renderAdmin();
   if (view === 'merchant') renderMerchantArea();
@@ -182,6 +276,33 @@ document.getElementById('topnav').addEventListener('click', (e) => {
   }
   switchView(view);
 });
+
+/* ---------- AI offer finder ---------- */
+async function askAI() {
+  const input = document.getElementById('aiQuery');
+  const resultEl = document.getElementById('aiResult');
+  const query = input.value.trim();
+  if (!query) return;
+  resultEl.innerHTML = `<div class="ai-result">Thinking...</div>`;
+  try {
+    const { offerId, message } = await api('/api/ai/recommend', { method: 'POST', body: { query } });
+    if (offerId) {
+      resultEl.innerHTML = `<div class="ai-result"><span>${message}</span><button class="btn btn-secondary" onclick="openOfferById(${offerId})">View this offer</button></div>`;
+    } else {
+      resultEl.innerHTML = `<div class="ai-result">${message}</div>`;
+    }
+  } catch (e) {
+    resultEl.innerHTML = `<div class="ai-result ai-error">${e.message}</div>`;
+  }
+}
+
+async function openOfferById(id) {
+  if (!window.__offersCache || !window.__offersCache.find(o => o.id === id)) {
+    await renderOffers();
+  }
+  const found = (window.__offersCache || []).find(o => o.id === id);
+  if (found) openOffer(id);
+}
 
 /* ---------- Offers ---------- */
 function renderChips() {
@@ -230,6 +351,7 @@ async function renderOffers() {
 
 function openOffer(id) {
   currentOffer = window.__offersCache.find(o => o.id === id);
+  purchaseQty = 1;
   const pct = Math.round((1 - currentOffer.price / currentOffer.original) * 100);
   document.getElementById('offerModalBody').innerHTML = `
     <div class="offer-cat">${currentOffer.category}</div>
@@ -241,6 +363,15 @@ function openOffer(id) {
       <span class="discount-badge">${pct}% off</span>
     </div>
     <div class="terms-box"><strong>Terms:</strong> ${currentOffer.terms}</div>
+    <div class="qty-row">
+      <label>Quantity</label>
+      <div class="qty-stepper">
+        <button onclick="changeQty(-1)">−</button>
+        <span id="qtyValue">1</span>
+        <button onclick="changeQty(1)">+</button>
+      </div>
+      <span class="qty-total">Total: $<span id="qtyTotal">${currentOffer.price}</span></span>
+    </div>
     <div class="btn-row">
       <button class="btn btn-primary" style="flex:1;" onclick="startPurchase()">Buy for myself</button>
       <button class="btn btn-secondary" style="flex:1;" onclick="startGift()">Send as gift</button>
@@ -249,10 +380,17 @@ function openOffer(id) {
   openModal('offerModal');
 }
 
+function changeQty(delta) {
+  purchaseQty = Math.max(1, Math.min(20, purchaseQty + delta));
+  document.getElementById('qtyValue').textContent = purchaseQty;
+  document.getElementById('qtyTotal').textContent = (currentOffer.price * purchaseQty).toFixed(2).replace(/\.00$/, '');
+}
+
 function startPurchase() {
   if (!currentUser) { closeModal('offerModal'); openModal('authModal'); return; }
   closeModal('offerModal');
-  document.getElementById('purchaseSummary').innerHTML = `<strong>${currentOffer.title}</strong> — $${currentOffer.price}`;
+  const total = (currentOffer.price * purchaseQty).toFixed(2).replace(/\.00$/, '');
+  document.getElementById('purchaseSummary').innerHTML = `<strong>${currentOffer.title}</strong> — ${purchaseQty} × $${currentOffer.price} = $${total}`;
   openModal('purchaseModal');
 }
 
@@ -269,10 +407,10 @@ function startGift() {
 
 async function completePurchase() {
   try {
-    await api('/api/vouchers/purchase', { method: 'POST', body: { offerId: currentOffer.id } });
+    const { total } = await api('/api/vouchers/purchase', { method: 'POST', body: { offerId: currentOffer.id, quantity: purchaseQty } });
     closeModal('purchaseModal');
     renderOffers();
-    alert('Payment confirmed. Check "My vouchers" for your code.');
+    alert(`Payment confirmed for $${total}. Check "My vouchers" for your code${purchaseQty > 1 ? 's' : ''}.`);
   } catch (e) {
     alert(e.message);
   }
@@ -294,7 +432,7 @@ async function completeGift() {
     if (claimed) {
       alert(`Gift sent to ${recipientName}.`);
     } else {
-      alert(`Gift sent! They don't have a Waffer account yet, so we'll prompt them to sign up with this email or phone to claim their voucher.`);
+      alert(`Gift sent! They don't have a Waffer account yet, so we've emailed them to sign up and claim their voucher.`);
     }
   } catch (e) {
     showNotice('giftNotice', e.message, 'error');
@@ -311,11 +449,12 @@ async function renderWallet() {
       <div class="voucher-card">
         <div class="voucher-left">
           <h4>${v.offerTitle}${v.giftedTo ? ' <span style="font-weight:400;color:var(--muted);font-size:12px;">(gift)</span>' : ''}</h4>
-          <div class="voucher-meta">${v.merchantName} &middot; $${v.price} &middot; <span class="voucher-code">${v.code}</span></div>
+          <div class="voucher-meta">${v.merchantName} &middot; ${v.discountPct != null ? v.discountPct + '% off' : ''} &middot; $${v.price}${v.expiryDate ? ' &middot; valid until ' + v.expiryDate : ''}</div>
+          <div class="voucher-code-row">Code: <span class="voucher-code">${v.code}</span></div>
         </div>
         <div style="display:flex;align-items:center;gap:10px;">
           <span class="status-pill status-${v.status}">${v.status}</span>
-          ${v.status === 'active' ? `<button class="btn btn-secondary" onclick="showQR('${v.code}', ${JSON.stringify(v.offerTitle)})">Show QR</button>` : ''}
+          ${v.status === 'active' ? `<button class="btn btn-secondary" onclick="showQR('${v.code}')">Show QR</button>` : ''}
         </div>
       </div>
     `).join('');
@@ -328,15 +467,17 @@ async function renderWallet() {
     <div class="voucher-card">
       <div class="voucher-left">
         <h4>${v.offerTitle}</h4>
-        <div class="voucher-meta">To ${v.giftedTo || v.recipientEmail || v.recipientPhone || 'pending'} &middot; $${v.price} &middot; <span class="voucher-code">${v.code}</span></div>
+        <div class="voucher-meta">To ${v.giftedTo || v.recipientEmail || v.recipientPhone || 'pending'} &middot; $${v.price}</div>
+        <div class="voucher-code-row">Code: <span class="voucher-code">${v.code}</span></div>
       </div>
       <span class="status-pill status-${v.status}">${v.status === 'pending-claim' ? 'awaiting sign-up' : v.status}</span>
     </div>
   `).join('');
 }
 
-function showQR(code, title) {
-  document.getElementById('qrTitle').textContent = title;
+function showQR(code) {
+  window.__voucherLookup = window.__voucherLookup || {};
+  document.getElementById('qrTitle').textContent = 'Voucher QR';
   document.getElementById('qrCode').textContent = code;
   const pattern = document.getElementById('qrPattern');
   pattern.innerHTML = '';
@@ -355,6 +496,7 @@ async function redeemVoucher() {
     const { voucher } = await api('/api/vouchers/redeem', { method: 'POST', body: { code: input.value } });
     showNotice('redeemNotice', `Voucher ${voucher.code} redeemed successfully for "${voucher.offerTitle}".`, 'success');
     input.value = '';
+    loadMerchantDashboard();
   } catch (e) {
     showNotice('redeemNotice', e.message, 'error');
   }
@@ -382,11 +524,15 @@ async function renderAdmin() {
     </tr>
   `).join('') || `<tr><td colspan="5" class="empty">No merchants yet.</td></tr>`;
 
-  const { offers } = await api('/api/admin/offers');
-  document.getElementById('adminOfferTable').innerHTML = offers.map(o => `
+  window.__adminOffersCache = (await api('/api/admin/offers')).offers;
+  document.getElementById('adminOfferTable').innerHTML = window.__adminOffersCache.map(o => `
     <tr>
-      <td>${o.title}</td><td>${o.merchantName}</td><td>$${o.price}</td><td>${o.sold}</td><td>${o.status}</td>
-      <td><button class="row-btn" onclick="toggleOfferStatus(${o.id})">${o.status === 'Live' ? 'Pause' : 'Resume'}</button></td>
+      <td><a href="#" class="offer-link" onclick="openOfferDetail(${o.id});return false;">${o.title}</a></td>
+      <td>${o.merchantName}</td><td>$${o.price}</td><td>${o.sold}</td><td>${o.status}</td>
+      <td>
+        <button class="row-btn" onclick="openEditOffer(${o.id})">Edit</button>
+        <button class="row-btn" onclick="toggleOfferStatus(${o.id})">${o.status === 'Live' ? 'Pause' : 'Resume'}</button>
+      </td>
     </tr>
   `).join('') || `<tr><td colspan="6" class="empty">No offers yet.</td></tr>`;
 }
@@ -394,6 +540,64 @@ async function renderAdmin() {
 async function toggleOfferStatus(id) {
   await api(`/api/admin/offers/${id}/toggle`, { method: 'PATCH' });
   renderAdmin();
+}
+
+function openEditOffer(id) {
+  const o = (window.__adminOffersCache || []).find(x => x.id === id);
+  if (!o) return;
+  document.getElementById('eoId').value = o.id;
+  document.getElementById('eoCategory').value = o.category;
+  document.getElementById('eoTitle').value = o.title;
+  document.getElementById('eoOriginal').value = o.original;
+  document.getElementById('eoPrice').value = o.price;
+  document.getElementById('eoExpiry').value = o.expiryDate || '';
+  document.getElementById('eoTerms').value = o.terms;
+  clearNotice('editOfferNotice');
+  openModal('editOfferModal');
+}
+
+async function saveOfferEdit() {
+  clearNotice('editOfferNotice');
+  const id = document.getElementById('eoId').value;
+  const body = {
+    category: document.getElementById('eoCategory').value,
+    title: document.getElementById('eoTitle').value.trim(),
+    original: document.getElementById('eoOriginal').value,
+    price: document.getElementById('eoPrice').value,
+    expiryDate: document.getElementById('eoExpiry').value,
+    terms: document.getElementById('eoTerms').value.trim()
+  };
+  try {
+    await api(`/api/admin/offers/${id}`, { method: 'PATCH', body });
+    closeModal('editOfferModal');
+    renderAdmin();
+  } catch (e) {
+    showNotice('editOfferNotice', e.message, 'error');
+  }
+}
+
+async function openOfferDetail(id) {
+  try {
+    const d = await api(`/api/admin/offers/${id}/detail`);
+    const pct = Math.round((1 - d.offer.price / d.offer.original) * 100);
+    document.getElementById('offerDetailBody').innerHTML = `
+      <h3>${d.offer.title}</h3>
+      <div class="offer-merchant" style="margin-bottom:16px;">${d.merchantName} &middot; ${d.offer.category} &middot; ${pct}% off ($${d.offer.price} of $${d.offer.original})</div>
+      <div class="stat-grid" style="margin-bottom:20px;">
+        <div class="stat-card"><div class="stat-label">Sold</div><div class="stat-value">${d.sold}</div></div>
+        <div class="stat-card"><div class="stat-label">Redeemed</div><div class="stat-value">${d.redeemed}</div></div>
+        <div class="stat-card"><div class="stat-label">Revenue</div><div class="stat-value">$${d.revenue}</div></div>
+        <div class="stat-card"><div class="stat-label">Commission (${Math.round(d.commissionRate * 100)}%)</div><div class="stat-value">$${d.commission}</div></div>
+      </div>
+      <p class="note" style="margin-bottom:14px;">Merchant payout: <strong>$${d.payout}</strong></p>
+      <table><thead><tr><th>Code</th><th>Buyer</th><th>Status</th><th>Purchased</th><th>Redeemed</th></tr></thead><tbody>
+        ${d.vouchers.map(v => `<tr><td class="voucher-code">${v.code}</td><td>${v.buyerName}${v.isGift ? ' (gift)' : ''}</td><td><span class="status-pill status-${v.status}">${v.status}</span></td><td>${fmtDate(v.createdAt)}</td><td>${fmtDate(v.redeemedAt)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">No sales yet.</td></tr>'}
+      </tbody></table>
+    `;
+    openModal('offerDetailModal');
+  } catch (e) {
+    alert(e.message);
+  }
 }
 
 async function uploadLogo(merchantId, input) {
@@ -447,10 +651,11 @@ async function createOfferAdmin() {
   const title = document.getElementById('noTitle').value.trim();
   const original = document.getElementById('noOriginal').value;
   const price = document.getElementById('noPrice').value;
+  const expiryDate = document.getElementById('noExpiry').value;
   const terms = document.getElementById('noTerms').value.trim();
   try {
-    await api('/api/admin/offers', { method: 'POST', body: { merchantId, title, original, price, terms } });
-    ['noTitle', 'noOriginal', 'noPrice', 'noTerms'].forEach(id => document.getElementById(id).value = '');
+    await api('/api/admin/offers', { method: 'POST', body: { merchantId, title, original, price, expiryDate, terms } });
+    ['noTitle', 'noOriginal', 'noPrice', 'noExpiry', 'noTerms'].forEach(id => document.getElementById(id).value = '');
     closeModal('newOfferModal');
     renderAdmin();
     renderOffers();
@@ -460,6 +665,7 @@ async function createOfferAdmin() {
 }
 
 document.getElementById('searchInput').addEventListener('keyup', renderOffers);
+document.getElementById('aiQuery').addEventListener('keyup', (e) => { if (e.key === 'Enter') askAI(); });
 
 /* ---------- Init ---------- */
 (async function init() {
@@ -468,4 +674,11 @@ document.getElementById('searchInput').addEventListener('keyup', renderOffers);
   await refreshMerchantAuth();
   renderChips();
   renderOffers();
+
+  const params = new URLSearchParams(location.search);
+  const resetToken = params.get('resetToken');
+  if (resetToken) {
+    window.__resetToken = resetToken;
+    openModal('resetPasswordModal');
+  }
 })();
