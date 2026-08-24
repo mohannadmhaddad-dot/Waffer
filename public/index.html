@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Waffer — Discount Vouchers</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="logo"><span class="seal">W</span> Waffer</div>
+    <nav class="topnav" id="topnav">
+      <button data-view="customer" class="active">Browse</button>
+      <button data-view="wallet" id="walletNavBtn" style="display:none;">My vouchers</button>
+      <button data-view="merchant">Merchant redeem</button>
+      <button data-view="admin" id="adminNavBtn" style="display:none;">Admin</button>
+    </nav>
+    <div id="authArea"></div>
+  </div>
+</header>
+
+<main class="container">
+
+  <section class="view active" id="view-customer">
+    <div class="hero">
+      <h1>Save on nights out and dining</h1>
+      <p>Discounted vouchers for entertainment and restaurants across Lebanon. Buy for yourself, or send one as a gift to a friend who already has an account.</p>
+      <div class="search-row">
+        <input id="searchInput" placeholder="Search offers, e.g. cinema, sushi..." />
+        <button onclick="renderOffers()">Search</button>
+      </div>
+    </div>
+    <div class="chips" id="categoryChips"></div>
+    <div class="grid" id="offerGrid"></div>
+  </section>
+
+  <section class="view" id="view-wallet">
+    <h2>My vouchers</h2>
+    <div id="walletList"></div>
+  </section>
+
+  <section class="view" id="view-merchant">
+    <h2>Redeem a voucher</h2>
+    <div class="lean-note">Shared code checker for merchants at the till — no login required for this MVP. In production this would sit behind a simple merchant PIN.</div>
+    <div class="panel">
+      <div class="two-col">
+        <div class="field" style="margin-bottom:0;">
+          <label>Voucher code</label>
+          <input id="redeemInput" placeholder="e.g. WQ-8F2K91" />
+        </div>
+        <div style="display:flex;align-items:flex-end;">
+          <button class="btn btn-primary" style="height:41px;" onclick="redeemVoucher()">Verify &amp; redeem</button>
+        </div>
+      </div>
+      <div class="inline-notice" id="redeemNotice"></div>
+    </div>
+  </section>
+
+  <section class="view" id="view-admin">
+    <h2>Admin panel</h2>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-label">GMV (USD)</div><div class="stat-value" id="aGMV">$0</div></div>
+      <div class="stat-card"><div class="stat-label">Merchants onboarded</div><div class="stat-value" id="aMerchants">0</div></div>
+      <div class="stat-card"><div class="stat-label">Vouchers sold</div><div class="stat-value" id="aVouchers">0</div></div>
+      <div class="stat-card"><div class="stat-label">Redeemed</div><div class="stat-value" id="aRedeemed">0</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3 style="margin:0;">Merchants</h3><button class="btn btn-primary" onclick="openModal('newMerchantModal')">+ Add merchant</button></div>
+      <table><thead><tr><th>Business</th><th>Category</th><th>Contact</th></tr></thead><tbody id="adminMerchantTable"></tbody></table>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3 style="margin:0;">Offers</h3><button class="btn btn-primary" onclick="openNewOfferModal()">+ Create offer</button></div>
+      <table><thead><tr><th>Offer</th><th>Merchant</th><th>Price</th><th>Sold</th><th>Status</th><th></th></tr></thead><tbody id="adminOfferTable"></tbody></table>
+    </div>
+  </section>
+
+</main>
+
+<footer>Waffer — real working build. Payment is simulated; connect Whish before taking live transactions.</footer>
+
+<!-- Auth modal -->
+<div class="modal-overlay" id="authModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('authModal')">&times;</button>
+    <div id="authTabs" class="mini-tabs">
+      <button class="active" data-authtab="login" onclick="setAuthTab('login')">Log in</button>
+      <button data-authtab="register" onclick="setAuthTab('register')">Create account</button>
+    </div>
+    <div id="loginForm">
+      <div class="field"><label>Email</label><input id="loginEmail" placeholder="you@example.com" /></div>
+      <div class="field"><label>Password</label><input id="loginPassword" type="password" placeholder="••••••••" /></div>
+      <div class="inline-notice" id="loginNotice"></div>
+      <button class="btn btn-primary btn-block" onclick="doLogin()">Log in</button>
+      <p class="note">Demo accounts: layla@example.com / demo1234, karim@example.com / demo1234, admin@waffer.com / admin123</p>
+    </div>
+    <div id="registerForm" style="display:none;">
+      <div class="field"><label>Full name</label><input id="regName" /></div>
+      <div class="field"><label>Email</label><input id="regEmail" /></div>
+      <div class="field"><label>Phone (optional)</label><input id="regPhone" placeholder="+961 ..." /></div>
+      <div class="field"><label>Password</label><input id="regPassword" type="password" /></div>
+      <div class="inline-notice" id="registerNotice"></div>
+      <button class="btn btn-primary btn-block" onclick="doRegister()">Create account</button>
+    </div>
+  </div>
+</div>
+
+<!-- Offer detail modal -->
+<div class="modal-overlay" id="offerModal"><div class="modal"><button class="modal-close" onclick="closeModal('offerModal')">&times;</button><div id="offerModalBody"></div></div></div>
+
+<!-- Purchase modal -->
+<div class="modal-overlay" id="purchaseModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('purchaseModal')">&times;</button>
+    <h3>Checkout</h3>
+    <div id="purchaseSummary" style="margin-bottom:14px;font-size:14px;color:var(--muted);"></div>
+    <div class="field"><label>Card number</label><input placeholder="4242 4242 4242 4242" /></div>
+    <div class="two-col"><div class="field"><label>Expiry</label><input placeholder="MM/YY" /></div><div class="field"><label>CVC</label><input placeholder="123" /></div></div>
+    <button class="btn btn-primary btn-block" onclick="completePurchase()">Confirm payment</button>
+    <p class="note">Payment is simulated in this build — swap in Whish's integration here.</p>
+  </div>
+</div>
+
+<!-- Gift modal -->
+<div class="modal-overlay" id="giftModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('giftModal')">&times;</button>
+    <h3>Send as a gift</h3>
+    <div id="giftSummary" style="margin-bottom:14px;font-size:14px;color:var(--muted);"></div>
+    <div class="field"><label>Recipient's phone or email</label><input id="giftContact" placeholder="Must be a registered Waffer account" /></div>
+    <div class="field"><label>Message (optional)</label><textarea id="giftMessage" placeholder="Happy birthday!"></textarea></div>
+    <div class="inline-notice" id="giftNotice"></div>
+    <button class="btn btn-primary btn-block" onclick="completeGift()">Send gift</button>
+    <p class="note">Try: karim@example.com or layla@example.com (both registered demo accounts)</p>
+  </div>
+</div>
+
+<!-- QR modal -->
+<div class="modal-overlay" id="qrModal">
+  <div class="modal" style="max-width:340px;text-align:center;">
+    <button class="modal-close" onclick="closeModal('qrModal')">&times;</button>
+    <h3 id="qrTitle" style="margin-top:10px;"></h3>
+    <div style="display:flex;justify-content:center;margin:16px 0;"><div class="qr-block" id="qrPattern"></div></div>
+    <div class="voucher-code" id="qrCode" style="font-size:16px;"></div>
+    <p class="note">Show this code to the merchant at redemption.</p>
+  </div>
+</div>
+
+<!-- Admin: add merchant -->
+<div class="modal-overlay" id="newMerchantModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('newMerchantModal')">&times;</button>
+    <h3>Add a merchant</h3>
+    <div class="field"><label>Business name</label><input id="nmName" /></div>
+    <div class="field"><label>Category</label><select id="nmCategory"><option>Entertainment</option><option>Restaurants</option></select></div>
+    <div class="field"><label>WhatsApp / contact</label><input id="nmContact" placeholder="+961 XX XXX XXX" /></div>
+    <div class="inline-notice" id="merchantNotice"></div>
+    <button class="btn btn-primary btn-block" onclick="createMerchant()">Add merchant</button>
+  </div>
+</div>
+
+<!-- Admin: create offer -->
+<div class="modal-overlay" id="newOfferModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('newOfferModal')">&times;</button>
+    <h3>Create an offer</h3>
+    <div class="field"><label>Merchant</label><select id="noMerchant"></select></div>
+    <div class="field"><label>Offer title</label><input id="noTitle" /></div>
+    <div class="two-col"><div class="field"><label>Original price (USD)</label><input id="noOriginal" type="number" /></div><div class="field"><label>Voucher price (USD)</label><input id="noPrice" type="number" /></div></div>
+    <div class="field"><label>Terms & conditions</label><textarea id="noTerms"></textarea></div>
+    <div class="inline-notice" id="offerNotice"></div>
+    <button class="btn btn-primary btn-block" onclick="createOfferAdmin()">Publish offer</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
