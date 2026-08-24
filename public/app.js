@@ -1,4 +1,4 @@
-const emoji = { Entertainment: "🎬", Restaurants: "🍽️" };
+const catClass = { Entertainment: 'cat-ent', Restaurants: 'cat-res', 'Spa & Beauty': 'cat-spa', 'Medical Checkups': 'cat-med' };
 let currentUser = null;
 let currentOffer = null;
 let activeCategory = "All";
@@ -122,9 +122,8 @@ document.getElementById('topnav').addEventListener('click', (e) => {
 /* ---------- Offers ---------- */
 function renderChips() {
   const el = document.getElementById('categoryChips');
-  const cats = ["All", "Entertainment", "Restaurants"];
-  el.innerHTML = cats.map(c => `<button class="chip ${c === activeCategory ? 'active' : ''}" onclick="setCategory('${c}')">${c}</button>`).join('')
-    + `<button class="chip disabled" title="Coming in phase 2">Spa &amp; Beauty</button><button class="chip disabled" title="Coming in phase 2">Medical Checkups</button>`;
+  const cats = ["All", "Entertainment", "Restaurants", "Spa & Beauty", "Medical Checkups"];
+  el.innerHTML = cats.map(c => `<button class="chip ${c === activeCategory ? 'active' : ''}" onclick="setCategory('${c}')">${c}</button>`).join('');
 }
 
 function setCategory(c) { activeCategory = c; renderChips(); renderOffers(); }
@@ -142,7 +141,7 @@ async function renderOffers() {
     const pct = Math.round((1 - o.price / o.original) * 100);
     return `
     <div class="offer-card">
-      <div class="offer-thumb">${emoji[o.category] || '🎟️'}</div>
+      <div class="offer-thumb ${catClass[o.category] || ''}"><span class="thumb-badge">${o.merchantInitials || '??'}</span></div>
       <div class="offer-body">
         <div class="offer-cat">${o.category}</div>
         <div class="offer-title">${o.title}</div>
