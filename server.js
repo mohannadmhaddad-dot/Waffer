@@ -2,10 +2,29 @@ const express = require('express');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const db = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+const uploadsDir = path.join(__dirname, 'public', 'uploads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, uploadsDir),
+    filename: (req, file, cb) => {
+      const safe = file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '');
+      cb(null, Date.now() + '-' + safe);
+    }
+  }),
+  limits: { fileSize: 3 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) return cb(new Error('Only image files are allowed.'));
+    cb(null, true);
+  }
+});
 
 app.use(express.json());
 app.use(session({
@@ -281,6 +300,18 @@ app.patch('/api/admin/merchants/:id/logo', requireAdmin, (req, res) => {
   merchant.logoUrl = req.body.logoUrl || null;
   db.save();
   res.json({ merchant: { ...merchant, passwordHash: undefined } });
+});
+
+app.post('/api/admin/merchants/:id/logo-upload', requireAdmin, (req, res) => {
+  upload.single('logo')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || 'Upload failed.' });
+    const merchant = data.merchants.find(m => m.id === Number(req.params.id));
+    if (!merchant) return res.status(404).json({ error: 'Merchant not found.' });
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
+    merchant.logoUrl = '/uploads/' + req.file.filename;
+    db.save();
+    res.json({ merchant: { ...merchant, passwordHash: undefined } });
+  });
 });
 
 app.get('/api/admin/offers', requireAdmin, (req, res) => {
