@@ -1,4 +1,4 @@
-const express = require('express');
+8const express = require('express');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const path = require('path');
@@ -24,9 +24,18 @@ function genVoucherCode() {
   return 'WQ-' + id.toString(36).toUpperCase() + rand;
 }
 
+function slugify(name) {
+  return (name || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 20) || 'merchant';
+}
+
 function currentUser(req) {
   if (!req.session.userId) return null;
   return data.users.find(u => u.id === req.session.userId) || null;
+}
+
+function currentMerchant(req) {
+  if (!req.session.merchantId) return null;
+  return data.merchants.find(m => m.id === req.session.merchantId) || null;
 }
 
 function requireAuth(req, res, next) {
@@ -43,24 +52,54 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+function requireMerchant(req, res, next) {
+  const merchant = currentMerchant(req);
+  if (!merchant) return res.status(401).json({ error: 'Please log in with your business account first.' });
+  req.merchant = merchant;
+  next();
+}
+
 function publicUser(u) {
   return { id: u.id, name: u.name, email: u.email, phone: u.phone, isAdmin: u.isAdmin };
 }
 
-/* ---------- Auth ---------- */
+function publicMerchant(m) {
+  return { id: m.id, name: m.name, category: m.category, contact: m.contact, username: m.username, logoUrl: m.logoUrl || null };
+}
+
+/* ---------- Customer auth ---------- */
 app.post('/api/auth/register', (req, res) => {
-  const { name, email, phone, password } = req.body;
-  if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required.' });
+  const { name, email, phone, countryCode, password } = req.body;
+  const fullPhone = phone ? `${countryCode || ''}${phone}`.trim() : '';
+  if (!name || !email || !password || !phone) {
+    return res.status(400).json({ error: 'Name, email, phone and password are required.' });
+  }
   if (data.users.some(u => u.email.toLowerCase() === email.toLowerCase())) {
     return res.status(400).json({ error: 'An account with that email already exists.' });
   }
   const id = db.nextId('user');
   const passwordHash = bcrypt.hashSync(password, 8);
-  const user = { id, name, email, phone: phone || null, passwordHash, isAdmin: false, createdAt: Date.now() };
+  const user = { id, name, email, phone: fullPhone, passwordHash, isAdmin: false, createdAt: Date.now() };
   data.users.push(user);
+
+  const claimEmail = email.toLowerCase();
+  const claimPhone = fullPhone.toLowerCase();
+  let claimedCount = 0;
+  data.vouchers.forEach(v => {
+    if (v.status === 'pending-claim' &&
+      ((v.recipientEmail && v.recipientEmail === claimEmail) ||
+       (v.recipientPhone && claimPhone && v.recipientPhone === claimPhone))) {
+      v.ownerId = id;
+      v.status = 'active';
+      v.giftedTo = name;
+      v.recipientEmail = null;
+      v.recipientPhone = null;
+      claimedCount++;
+    }
+  });
   db.save();
   req.session.userId = id;
-  res.json({ user: publicUser(user) });
+  res.json({ user: publicUser(user), claimedGifts: claimedCount });
 });
 
 app.post('/api/auth/login', (req, res) => {
@@ -74,12 +113,34 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 app.post('/api/auth/logout', (req, res) => {
-  req.session.destroy(() => res.json({ ok: true }));
+  req.session.userId = null;
+  res.json({ ok: true });
 });
 
 app.get('/api/auth/me', (req, res) => {
   const user = currentUser(req);
   res.json({ user: user ? publicUser(user) : null });
+});
+
+/* ---------- Merchant auth ---------- */
+app.post('/api/merchant/login', (req, res) => {
+  const { username, password } = req.body;
+  const merchant = data.merchants.find(m => m.username && m.username.toLowerCase() === (username || '').toLowerCase());
+  if (!merchant || !merchant.passwordHash || !bcrypt.compareSync(password || '', merchant.passwordHash)) {
+    return res.status(400).json({ error: 'Incorrect username or password.' });
+  }
+  req.session.merchantId = merchant.id;
+  res.json({ merchant: publicMerchant(merchant) });
+});
+
+app.post('/api/merchant/logout', (req, res) => {
+  req.session.merchantId = null;
+  res.json({ ok: true });
+});
+
+app.get('/api/merchant/me', (req, res) => {
+  const merchant = currentMerchant(req);
+  res.json({ merchant: merchant ? publicMerchant(merchant) : null });
 });
 
 /* ---------- Offers (public read) ---------- */
@@ -94,19 +155,18 @@ app.get('/api/offers', (req, res) => {
       return o.title.toLowerCase().includes(s) || (merchant && merchant.name.toLowerCase().includes(s));
     });
   }
-  const withMerchant = list.map(o => ({
-    ...o,
-    merchantName: (data.merchants.find(m => m.id === o.merchantId) || {}).name || 'Unknown',
-    merchantInitials: (data.merchants.find(m => m.id === o.merchantId) || {}).initials || '??'
-  }));
+  const withMerchant = list.map(o => {
+    const m = data.merchants.find(m => m.id === o.merchantId) || {};
+    return { ...o, merchantName: m.name || 'Unknown', merchantInitials: m.initials || '??', merchantLogoUrl: m.logoUrl || null };
+  });
   res.json({ offers: withMerchant });
 });
 
 app.get('/api/offers/:id', (req, res) => {
   const offer = data.offers.find(o => o.id === Number(req.params.id));
   if (!offer) return res.status(404).json({ error: 'Offer not found.' });
-  const merchant = data.merchants.find(m => m.id === offer.merchantId);
-  res.json({ offer: { ...offer, merchantName: merchant ? merchant.name : 'Unknown', merchantInitials: merchant ? merchant.initials : '??' } });
+  const merchant = data.merchants.find(m => m.id === offer.merchantId) || {};
+  res.json({ offer: { ...offer, merchantName: merchant.name || 'Unknown', merchantInitials: merchant.initials || '??', merchantLogoUrl: merchant.logoUrl || null } });
 });
 
 /* ---------- Vouchers ---------- */
@@ -119,7 +179,7 @@ app.post('/api/vouchers/purchase', requireAuth, (req, res) => {
     id: code, code, offerId: offer.id, offerTitle: offer.title, price: offer.price,
     merchantName: (data.merchants.find(m => m.id === offer.merchantId) || {}).name,
     ownerId: req.user.id, buyerId: req.user.id, status: 'active',
-    giftedTo: null, createdAt: Date.now(), redeemedAt: null
+    giftedTo: null, recipientEmail: null, recipientPhone: null, createdAt: Date.now(), redeemedAt: null
   };
   data.vouchers.push(voucher);
   offer.sold += 1;
@@ -128,31 +188,37 @@ app.post('/api/vouchers/purchase', requireAuth, (req, res) => {
 });
 
 app.post('/api/vouchers/gift', requireAuth, (req, res) => {
-  const { offerId, recipientContact, message } = req.body;
+  const { offerId, recipientEmail, recipientPhone, message } = req.body;
   const offer = data.offers.find(o => o.id === Number(offerId));
   if (!offer || offer.status !== 'Live') return res.status(400).json({ error: 'Offer is not available.' });
-  if (!recipientContact) return res.status(400).json({ error: "Enter the recipient's phone or email." });
-  const contact = recipientContact.trim().toLowerCase();
+  const email = (recipientEmail || '').trim().toLowerCase();
+  const phone = (recipientPhone || '').trim().toLowerCase();
+  if (!email && !phone) return res.status(400).json({ error: "Enter the recipient's email or phone number." });
+
   const recipient = data.users.find(u =>
-    (u.email && u.email.toLowerCase() === contact) || (u.phone && u.phone.toLowerCase() === contact)
+    (email && u.email && u.email.toLowerCase() === email) ||
+    (phone && u.phone && u.phone.toLowerCase() === phone)
   );
-  if (!recipient) {
-    return res.status(404).json({ error: "This contact doesn't match a registered Waffer account. The recipient needs to create an account first — gifts can't be claimed as a guest." });
-  }
-  if (recipient.id === req.user.id) {
+  if (recipient && recipient.id === req.user.id) {
     return res.status(400).json({ error: "You can't gift a voucher to yourself." });
   }
+
   const code = genVoucherCode();
   const voucher = {
     id: code, code, offerId: offer.id, offerTitle: offer.title, price: offer.price,
     merchantName: (data.merchants.find(m => m.id === offer.merchantId) || {}).name,
-    ownerId: recipient.id, buyerId: req.user.id, status: 'active',
-    giftedTo: recipient.name, giftMessage: message || null, createdAt: Date.now(), redeemedAt: null
+    ownerId: recipient ? recipient.id : null,
+    buyerId: req.user.id,
+    status: recipient ? 'active' : 'pending-claim',
+    giftedTo: recipient ? recipient.name : null,
+    recipientEmail: recipient ? null : (email || null),
+    recipientPhone: recipient ? null : (phone || null),
+    giftMessage: message || null, createdAt: Date.now(), redeemedAt: null
   };
   data.vouchers.push(voucher);
   offer.sold += 1;
   db.save();
-  res.json({ voucher, recipientName: recipient.name });
+  res.json({ voucher, claimed: !!recipient, recipientName: recipient ? recipient.name : null });
 });
 
 app.get('/api/vouchers/mine', requireAuth, (req, res) => {
@@ -160,12 +226,22 @@ app.get('/api/vouchers/mine', requireAuth, (req, res) => {
   res.json({ vouchers: mine });
 });
 
-app.post('/api/vouchers/redeem', (req, res) => {
+app.get('/api/vouchers/sent', requireAuth, (req, res) => {
+  const sent = data.vouchers.filter(v => v.buyerId === req.user.id && v.ownerId !== req.user.id);
+  res.json({ vouchers: sent });
+});
+
+app.post('/api/vouchers/redeem', requireMerchant, (req, res) => {
   const { code } = req.body;
   if (!code) return res.status(400).json({ error: 'Enter a voucher code.' });
   const voucher = data.vouchers.find(v => v.code === code.trim().toUpperCase());
   if (!voucher) return res.status(404).json({ error: 'No voucher found with that code.' });
+  const offer = data.offers.find(o => o.id === voucher.offerId);
+  if (!offer || offer.merchantId !== req.merchant.id) {
+    return res.status(403).json({ error: 'This voucher was not issued for your business.' });
+  }
   if (voucher.status === 'redeemed') return res.status(400).json({ error: 'This voucher has already been redeemed.' });
+  if (voucher.status === 'pending-claim') return res.status(400).json({ error: 'This voucher has not been claimed by its recipient yet.' });
   voucher.status = 'redeemed';
   voucher.redeemedAt = Date.now();
   db.save();
@@ -181,17 +257,30 @@ app.get('/api/admin/stats', requireAdmin, (req, res) => {
 });
 
 app.get('/api/admin/merchants', requireAdmin, (req, res) => {
-  res.json({ merchants: data.merchants });
+  res.json({ merchants: data.merchants.map(m => ({ ...m, passwordHash: undefined })) });
 });
 
 app.post('/api/admin/merchants', requireAdmin, (req, res) => {
-  const { name, category, contact } = req.body;
+  const { name, category, contact, logoUrl } = req.body;
   if (!name || !category || !contact) return res.status(400).json({ error: 'Name, category and contact are required.' });
   const id = db.nextId('merchant');
-  const merchant = { id, name, category, contact };
+  let username = slugify(name);
+  let base = username, n = 1;
+  while (data.merchants.some(m => m.username === username)) { username = base + n; n++; }
+  const tempPassword = 'merchant123';
+  const passwordHash = bcrypt.hashSync(tempPassword, 8);
+  const merchant = { id, name, category, contact, initials: name.slice(0, 2).toUpperCase(), username, passwordHash, logoUrl: logoUrl || null };
   data.merchants.push(merchant);
   db.save();
-  res.json({ merchant });
+  res.json({ merchant: { ...merchant, passwordHash: undefined }, tempPassword });
+});
+
+app.patch('/api/admin/merchants/:id/logo', requireAdmin, (req, res) => {
+  const merchant = data.merchants.find(m => m.id === Number(req.params.id));
+  if (!merchant) return res.status(404).json({ error: 'Merchant not found.' });
+  merchant.logoUrl = req.body.logoUrl || null;
+  db.save();
+  res.json({ merchant: { ...merchant, passwordHash: undefined } });
 });
 
 app.get('/api/admin/offers', requireAdmin, (req, res) => {
