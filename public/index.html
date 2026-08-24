@@ -16,7 +16,7 @@
 
 <header class="topbar">
   <div class="topbar-inner">
-    <div class="logo">
+    <div class="logo" onclick="switchView('customer')" role="button" tabindex="0" title="Go to home">
       <svg class="logo-mark" width="32" height="32" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
         <circle cx="20" cy="20" r="19" fill="#FFFFFF" fill-opacity="0.15"/>
         <text x="20" y="27" text-anchor="middle" font-family="Arial, sans-serif" font-size="17" font-weight="800" fill="#FFFFFF">W</text>
@@ -44,6 +44,16 @@
         <button onclick="renderOffers()">Search</button>
       </div>
     </div>
+
+    <div class="ai-box">
+      <div class="ai-box-label">Not sure what you're looking for? Describe it and we'll find the best match.</div>
+      <div class="ai-box-row">
+        <input id="aiQuery" placeholder="e.g. a romantic dinner for two, or somewhere to take the kids this weekend" />
+        <button class="btn btn-primary" onclick="askAI()">Ask Waffer</button>
+      </div>
+      <div id="aiResult"></div>
+    </div>
+
     <div class="chips" id="categoryChips"></div>
     <div class="grid" id="offerGrid"></div>
   </section>
@@ -68,9 +78,27 @@
       </div>
     </div>
     <div id="merchantLoggedIn" style="display:none;">
-      <h2>Redeem a voucher</h2>
-      <p class="note" id="merchantWelcome" style="margin-bottom:18px;"></p>
+      <h2 id="merchantDashTitle">Dashboard</h2>
+      <div class="stat-grid">
+        <div class="stat-card"><div class="stat-label">Vouchers sold</div><div class="stat-value" id="mdSold">0</div></div>
+        <div class="stat-card"><div class="stat-label">Redeemed</div><div class="stat-value" id="mdRedeemed">0</div></div>
+        <div class="stat-card"><div class="stat-label">Sales volume</div><div class="stat-value" id="mdRevenue">$0</div></div>
+        <div class="stat-card"><div class="stat-label">Your payout</div><div class="stat-value" id="mdPayout">$0</div></div>
+      </div>
+      <p class="note" id="mdCommissionNote" style="margin-bottom:20px;"></p>
+
       <div class="panel">
+        <h3 style="margin-bottom:14px;">Your offers</h3>
+        <table><thead><tr><th>Offer</th><th>Sold</th><th>Redeemed</th><th>Revenue</th></tr></thead><tbody id="mdOffersTable"></tbody></table>
+      </div>
+
+      <div class="panel">
+        <h3 style="margin-bottom:14px;">Recent sales</h3>
+        <table><thead><tr><th>Voucher</th><th>Buyer</th><th>Price</th><th>Status</th><th>Date</th></tr></thead><tbody id="mdRecentTable"></tbody></table>
+      </div>
+
+      <div class="panel">
+        <h3 style="margin-bottom:14px;">Redeem a voucher</h3>
         <div class="two-col">
           <div class="field" style="margin-bottom:0;">
             <label>Voucher code</label>
@@ -100,6 +128,7 @@
     </div>
     <div class="panel">
       <div class="panel-head"><h3 style="margin:0;">Offers</h3><button class="btn btn-primary" onclick="openNewOfferModal()">+ Create offer</button></div>
+      <p class="note" style="margin-top:-10px;margin-bottom:14px;">Click an offer's title to see full sales details.</p>
       <table><thead><tr><th>Offer</th><th>Merchant</th><th>Price</th><th>Sold</th><th>Status</th><th></th></tr></thead><tbody id="adminOfferTable"></tbody></table>
     </div>
   </section>
@@ -121,6 +150,7 @@
       <div class="field"><label>Password</label><input id="loginPassword" type="password" placeholder="••••••••" /></div>
       <div class="inline-notice" id="loginNotice"></div>
       <button class="btn btn-primary btn-block" onclick="doLogin()">Log in</button>
+      <p class="note"><a href="#" onclick="showForgotForm();return false;">Forgot password?</a></p>
       <p class="note">Demo accounts: layla@example.com / demo1234, karim@example.com / demo1234, admin@waffer.com / admin123</p>
     </div>
     <div id="registerForm" style="display:none;">
@@ -137,6 +167,45 @@
       <div class="inline-notice" id="registerNotice"></div>
       <button class="btn btn-primary btn-block" onclick="doRegister()">Create account</button>
     </div>
+    <div id="forgotForm" style="display:none;">
+      <div class="field"><label>Email</label><input id="forgotEmail" placeholder="you@example.com" /></div>
+      <div class="inline-notice" id="forgotNotice"></div>
+      <button class="btn btn-primary btn-block" onclick="doForgotPassword()">Send reset link</button>
+      <p class="note"><a href="#" onclick="setAuthTab('login');return false;">Back to log in</a></p>
+    </div>
+  </div>
+</div>
+
+<!-- Reset password modal (opens automatically from email link) -->
+<div class="modal-overlay" id="resetPasswordModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('resetPasswordModal')">&times;</button>
+    <h3>Set a new password</h3>
+    <div class="field"><label>New password</label><input id="resetNewPassword" type="password" /></div>
+    <div class="inline-notice" id="resetNotice"></div>
+    <button class="btn btn-primary btn-block" onclick="doResetPassword()">Save new password</button>
+  </div>
+</div>
+
+<!-- Profile modal -->
+<div class="modal-overlay" id="profileModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('profileModal')">&times;</button>
+    <h3>Your profile</h3>
+    <div class="field"><label>Full name</label><input id="profName" /></div>
+    <div class="field"><label>Email</label><input id="profEmail" disabled /></div>
+    <div class="field"><label>Mobile number</label><input id="profPhone" placeholder="+961 70 123 456" /></div>
+    <div class="field"><label>Gender</label>
+      <select id="profGender">
+        <option value="">Prefer not to say</option>
+        <option value="female">Female</option>
+        <option value="male">Male</option>
+        <option value="other">Other</option>
+      </select>
+    </div>
+    <div class="field"><label>Birthday</label><input id="profBirthday" type="date" /></div>
+    <div class="inline-notice" id="profileNotice"></div>
+    <button class="btn btn-primary btn-block" onclick="saveProfile()">Save changes</button>
   </div>
 </div>
 
@@ -167,7 +236,7 @@
     <div class="field"><label>Message (optional)</label><textarea id="giftMessage" placeholder="Happy birthday!"></textarea></div>
     <div class="inline-notice" id="giftNotice"></div>
     <button class="btn btn-primary btn-block" onclick="completeGift()">Send gift</button>
-    <p class="note">Fill in at least one. If they don't have a Waffer account yet, we'll prompt them to sign up to claim it.</p>
+    <p class="note">Fill in at least one. If they don't have a Waffer account yet, we'll email them to sign up and claim it.</p>
   </div>
 </div>
 
@@ -204,9 +273,34 @@
     <div class="field"><label>Merchant</label><select id="noMerchant"></select></div>
     <div class="field"><label>Offer title</label><input id="noTitle" /></div>
     <div class="two-col"><div class="field"><label>Original price (USD)</label><input id="noOriginal" type="number" /></div><div class="field"><label>Voucher price (USD)</label><input id="noPrice" type="number" /></div></div>
+    <div class="field"><label>Valid until</label><input id="noExpiry" type="date" /></div>
     <div class="field"><label>Terms & conditions</label><textarea id="noTerms"></textarea></div>
     <div class="inline-notice" id="offerNotice"></div>
     <button class="btn btn-primary btn-block" onclick="createOfferAdmin()">Publish offer</button>
+  </div>
+</div>
+
+<!-- Admin: edit offer -->
+<div class="modal-overlay" id="editOfferModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('editOfferModal')">&times;</button>
+    <h3>Edit offer</h3>
+    <input type="hidden" id="eoId" />
+    <div class="field"><label>Category</label><select id="eoCategory"><option>Entertainment</option><option>Restaurants</option><option>Spa &amp; Beauty</option><option>Medical Checkups</option></select></div>
+    <div class="field"><label>Offer title</label><input id="eoTitle" /></div>
+    <div class="two-col"><div class="field"><label>Original price (USD)</label><input id="eoOriginal" type="number" /></div><div class="field"><label>Voucher price (USD)</label><input id="eoPrice" type="number" /></div></div>
+    <div class="field"><label>Valid until</label><input id="eoExpiry" type="date" /></div>
+    <div class="field"><label>Terms & conditions</label><textarea id="eoTerms"></textarea></div>
+    <div class="inline-notice" id="editOfferNotice"></div>
+    <button class="btn btn-primary btn-block" onclick="saveOfferEdit()">Save changes</button>
+  </div>
+</div>
+
+<!-- Admin: offer detail -->
+<div class="modal-overlay" id="offerDetailModal">
+  <div class="modal" style="max-width:640px;">
+    <button class="modal-close" onclick="closeModal('offerDetailModal')">&times;</button>
+    <div id="offerDetailBody"></div>
   </div>
 </div>
 
