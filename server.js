@@ -108,7 +108,7 @@ async function sendEmail(to, subject, html) {
         'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ from: 'Waffer <onboarding@resend.dev>', to: [to], subject, html })
+      body: JSON.stringify({ from: 'Waffer <noreply@getwaffer.com>', to: [to], subject, html })
     });
     if (!res.ok) {
       const text = await res.text();
