@@ -5,11 +5,16 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const PDFDocument = require('pdfkit');
 const db = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const COMMISSION_RATE = 0.08;
+const DEFAULT_COMMISSION_RATE = 0.08;
+
+function commissionRateFor(merchant) {
+  return (merchant && typeof merchant.commissionRate === 'number') ? merchant.commissionRate : DEFAULT_COMMISSION_RATE;
+}
 
 const uploadsDir = path.join(__dirname, 'public', 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
@@ -66,6 +71,29 @@ function reviewStats(offerId) {
   if (list.length === 0) return { avgRating: null, reviewCount: 0 };
   const avg = list.reduce((a, r) => a + r.rating, 0) / list.length;
   return { avgRating: Math.round(avg * 10) / 10, reviewCount: list.length };
+}
+
+function emailTemplate(heading, bodyHtml) {
+  return `
+  <div style="background:#FAFAFA;padding:30px 16px;font-family:Arial,Helvetica,sans-serif;">
+    <div style="max-width:520px;margin:0 auto;background:#FFFFFF;border-radius:12px;overflow:hidden;border:1px solid #E5E7EB;">
+      <div style="background:#00A86B;padding:22px 28px;">
+        <span style="font-size:20px;font-weight:800;color:#FFFFFF;letter-spacing:-0.02em;">Waffer</span>
+      </div>
+      <div style="padding:28px;color:#1E293B;font-size:14px;line-height:1.6;">
+        <h2 style="margin:0 0 14px;font-size:18px;color:#1E293B;">${heading}</h2>
+        ${bodyHtml}
+      </div>
+      <div style="padding:18px 28px;background:#FAFAFA;border-top:1px solid #E5E7EB;font-size:11.5px;color:#64748B;">
+        Waffer — discount vouchers from local businesses in Lebanon.<br/>
+        This is an automated message, please don't reply directly to this email.
+      </div>
+    </div>
+  </div>`;
+}
+
+function emailButton(text, link) {
+  return `<div style="margin:22px 0;"><a href="${link}" style="background:#FF5722;color:#FFFFFF;text-decoration:none;padding:12px 26px;border-radius:8px;font-weight:700;font-size:14px;display:inline-block;">${text}</a></div>`;
 }
 
 async function sendEmail(to, subject, html) {
@@ -190,7 +218,7 @@ app.post('/api/auth/register', (req, res) => {
 
   const verifyLink = `${originOf(req)}/?verifyToken=${verifyToken}`;
   sendEmail(email, 'Verify your Waffer email',
-    `<p>Hi ${name},</p><p>Welcome to Waffer! Confirm your email address by clicking the link below.</p><p><a href="${verifyLink}">${verifyLink}</a></p>`);
+    emailTemplate('Welcome to Waffer!', `<p>Hi ${name},</p><p>Thanks for signing up. Please confirm your email address to get full access to your account.</p>${emailButton('Verify my email', verifyLink)}<p style="color:#64748B;font-size:12.5px;">If the button doesn't work, copy this link: ${verifyLink}</p>`));
 
   res.json({ user: publicUser(user), claimedGifts: claimedCount });
 });
@@ -245,7 +273,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     db.save();
     const link = `${originOf(req)}/?resetToken=${token}`;
     await sendEmail(user.email, 'Reset your Waffer password',
-      `<p>Hi ${user.name},</p><p>Click the link below to reset your Waffer password. This link expires in 1 hour.</p><p><a href="${link}">${link}</a></p><p>If you didn't request this, you can ignore this email.</p>`);
+      emailTemplate('Reset your password', `<p>Hi ${user.name},</p><p>We got a request to reset your Waffer password. This link expires in 1 hour.</p>${emailButton('Reset my password', link)}<p style="color:#64748B;font-size:12.5px;">If you didn't request this, you can safely ignore this email.</p>`));
   }
   res.json({ ok: true, message: 'If that email is registered, a reset link has been sent.' });
 });
@@ -280,7 +308,7 @@ app.post('/api/auth/resend-verification', requireAuth, async (req, res) => {
   db.save();
   const verifyLink = `${originOf(req)}/?verifyToken=${token}`;
   await sendEmail(req.user.email, 'Verify your Waffer email',
-    `<p>Hi ${req.user.name},</p><p>Confirm your email address by clicking the link below.</p><p><a href="${verifyLink}">${verifyLink}</a></p>`);
+    emailTemplate('Confirm your email', `<p>Hi ${req.user.name},</p><p>Please confirm your email address to get full access to your Waffer account.</p>${emailButton('Verify my email', verifyLink)}`));
   res.json({ ok: true, message: 'Verification email sent.' });
 });
 
@@ -313,6 +341,7 @@ app.post('/api/merchant/change-password', requireMerchant, (req, res) => {
   if (!bcrypt.compareSync(currentPassword, req.merchantAccount.passwordHash)) return res.status(400).json({ error: 'Current password is incorrect.' });
   if (newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters.' });
   req.merchantAccount.passwordHash = bcrypt.hashSync(newPassword, 8);
+  req.merchantAccount.plainPassword = newPassword;
   db.save();
   res.json({ ok: true });
 });
@@ -341,7 +370,8 @@ app.get('/api/merchant/dashboard', requireMerchantManager, (req, res) => {
   const sold = myVouchers.length;
   const redeemed = myVouchers.filter(v => v.status === 'redeemed').length;
   const revenue = money(myVouchers.reduce((a, v) => a + v.price, 0));
-  const commission = money(revenue * COMMISSION_RATE);
+  const rate = commissionRateFor(req.merchant);
+  const commission = money(revenue * rate);
   const payout = money(revenue - commission);
   const offerBreakdown = myOffers.map(o => {
     const ov = myVouchers.filter(v => v.offerId === o.id);
@@ -351,7 +381,7 @@ app.get('/api/merchant/dashboard', requireMerchantManager, (req, res) => {
     const buyer = data.users.find(u => u.id === v.buyerId);
     return { code: v.code, offerTitle: v.offerTitle, buyerName: buyer ? buyer.name : 'Unknown', price: v.price, status: v.status, createdAt: v.createdAt, redeemedAt: v.redeemedAt };
   }).sort((a, b) => b.createdAt - a.createdAt).slice(0, 100);
-  res.json({ sold, redeemed, revenue, commission, payout, commissionRate: COMMISSION_RATE, offers: offerBreakdown, recent });
+  res.json({ sold, redeemed, revenue, commission, payout, commissionRate: rate, offers: offerBreakdown, recent });
 });
 
 /* ---------- Categories (public read) ---------- */
@@ -480,14 +510,21 @@ app.post('/api/vouchers/purchase', requireAuth, (req, res) => {
   offer.sold += qty;
   db.save();
 
-  const codeList = vouchers.map(v => `<li><strong>${v.code}</strong></li>`).join('');
+  const codeList = vouchers.map(v => `<div style="background:#FAFAFA;border-radius:8px;padding:10px 14px;margin-bottom:8px;font-family:'Courier New',monospace;font-weight:700;font-size:15px;text-align:center;letter-spacing:1px;color:#1E293B;">${v.code}</div>`).join('');
   sendEmail(req.user.email, 'Your Waffer purchase confirmation',
-    `<p>Hi ${req.user.name},</p><p>Thanks for your purchase! Here's your receipt:</p>
-     <p><strong>${offer.title}</strong> from ${merchant.name || 'the merchant'}<br/>
-     ${qty} voucher${qty > 1 ? 's' : ''} &times; $${offer.price} = $${money(offer.price * qty)}</p>
-     <p>Your code${qty > 1 ? 's' : ''}:</p><ul>${codeList}</ul>
-     <p>Valid until: ${offer.expiryDate || 'no expiry set'}</p>
-     <p>Find these anytime in your Waffer wallet.</p>`);
+    emailTemplate('Payment confirmed', `
+      <p>Hi ${req.user.name},</p>
+      <p>Thanks for your purchase! Here's your receipt:</p>
+      <table style="width:100%;margin:16px 0;border-collapse:collapse;">
+        <tr><td style="padding:6px 0;color:#64748B;">Offer</td><td style="padding:6px 0;text-align:right;font-weight:700;">${offer.title}</td></tr>
+        <tr><td style="padding:6px 0;color:#64748B;">Merchant</td><td style="padding:6px 0;text-align:right;">${merchant.name || 'the merchant'}</td></tr>
+        <tr><td style="padding:6px 0;color:#64748B;">Quantity</td><td style="padding:6px 0;text-align:right;">${qty} &times; $${offer.price}</td></tr>
+        <tr><td style="padding:8px 0;color:#1E293B;font-weight:700;border-top:1px solid #E5E7EB;">Total</td><td style="padding:8px 0;text-align:right;font-weight:800;border-top:1px solid #E5E7EB;">$${money(offer.price * qty)}</td></tr>
+      </table>
+      <p style="margin-bottom:8px;">Your voucher code${qty > 1 ? 's' : ''}:</p>
+      ${codeList}
+      <p style="color:#64748B;font-size:12.5px;">Valid until: ${offer.expiryDate || 'no expiry set'}. Find these anytime in your Waffer wallet.</p>
+    `));
 
   res.json({ vouchers, total: money(offer.price * qty) });
 });
@@ -528,17 +565,35 @@ app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
 
   if (recipient && recipient.email) {
     sendEmail(recipient.email, 'You received a Waffer gift!',
-      `<p>Hi ${recipient.name},</p><p>${req.user.name} sent you a voucher: <strong>${offer.title}</strong> from ${voucher.merchantName}.</p><p>Your code: <strong>${code}</strong></p><p>Find it in your Waffer wallet.</p>`);
+      emailTemplate('You got a gift! 🎁', `
+        <p>Hi ${recipient.name},</p>
+        <p><strong>${req.user.name}</strong> sent you a voucher:</p>
+        <p style="font-size:16px;font-weight:700;margin:14px 0 4px;">${offer.title}</p>
+        <p style="color:#64748B;margin-top:0;">from ${voucher.merchantName}</p>
+        ${voucher.giftMessage ? `<div style="background:#FAFAFA;border-radius:8px;padding:12px 16px;margin:14px 0;font-style:italic;color:#1E293B;">"${voucher.giftMessage}"</div>` : ''}
+        <div style="background:#FAFAFA;border-radius:8px;padding:10px 14px;margin:14px 0;font-family:'Courier New',monospace;font-weight:700;font-size:15px;text-align:center;letter-spacing:1px;">${code}</div>
+        <p style="color:#64748B;font-size:12.5px;">Find it anytime in your Waffer wallet.</p>
+      `));
   } else if (email) {
     sendEmail(email, "You've received a gift on Waffer!",
-      `<p>${req.user.name} sent you a voucher: <strong>${offer.title}</strong> from ${voucher.merchantName}.</p><p>Create a free Waffer account using this email address to claim it:</p><p><a href="${originOf(req)}">${originOf(req)}</a></p>`);
+      emailTemplate('Someone sent you a gift! 🎁', `
+        <p><strong>${req.user.name}</strong> sent you a voucher:</p>
+        <p style="font-size:16px;font-weight:700;margin:14px 0 4px;">${offer.title}</p>
+        <p style="color:#64748B;margin-top:0;">from ${voucher.merchantName}</p>
+        ${voucher.giftMessage ? `<div style="background:#FAFAFA;border-radius:8px;padding:12px 16px;margin:14px 0;font-style:italic;color:#1E293B;">"${voucher.giftMessage}"</div>` : ''}
+        <p>Create a free Waffer account using this email address to claim it:</p>
+        ${emailButton('Create my account', originOf(req))}
+      `));
   }
 
   res.json({ voucher, claimed: !!recipient, recipientName: recipient ? recipient.name : null });
 });
 
 app.get('/api/vouchers/mine', requireAuth, (req, res) => {
-  const mine = data.vouchers.filter(v => v.ownerId === req.user.id);
+  const mine = data.vouchers.filter(v => v.ownerId === req.user.id).map(v => ({
+    ...v,
+    hasReviewed: data.reviews.some(r => r.offerId === v.offerId && r.userId === req.user.id)
+  }));
   res.json({ vouchers: mine });
 });
 
@@ -615,7 +670,7 @@ app.post('/api/admin/merchants', requireAdmin, (req, res) => {
   while (data.merchantAccounts.some(a => a.username === username)) { username = base + n; n++; }
   const tempPassword = generatePassword();
   const accountId = db.nextId('merchantAccount');
-  const account = { id: accountId, merchantId: id, role: 'manager', location: null, username, passwordHash: bcrypt.hashSync(tempPassword, 8) };
+  const account = { id: accountId, merchantId: id, role: 'manager', location: null, username, passwordHash: bcrypt.hashSync(tempPassword, 8), plainPassword: tempPassword };
   data.merchantAccounts.push(account);
 
   db.save();
@@ -640,10 +695,36 @@ app.post('/api/admin/merchants/:id/accounts', requireAdmin, (req, res) => {
   while (data.merchantAccounts.some(a => a.username === username)) { username = base + n; n++; }
   const tempPassword = generatePassword();
   const accountId = db.nextId('merchantAccount');
-  const account = { id: accountId, merchantId, role: 'frontdesk', location: location.trim(), username, passwordHash: bcrypt.hashSync(tempPassword, 8) };
+  const account = { id: accountId, merchantId, role: 'frontdesk', location: location.trim(), username, passwordHash: bcrypt.hashSync(tempPassword, 8), plainPassword: tempPassword };
   data.merchantAccounts.push(account);
   db.save();
   res.json({ account: { ...account, passwordHash: undefined }, tempPassword });
+});
+
+app.patch('/api/admin/merchants/:merchantId/accounts/:accountId', requireAdmin, (req, res) => {
+  const account = data.merchantAccounts.find(a => a.id === Number(req.params.accountId) && a.merchantId === Number(req.params.merchantId));
+  if (!account) return res.status(404).json({ error: 'Account not found.' });
+  const { username, password, regenerate } = req.body;
+  if (username && username.trim()) {
+    const newUsername = username.trim().toLowerCase();
+    if (data.merchantAccounts.some(a => a.id !== account.id && a.username === newUsername)) {
+      return res.status(400).json({ error: 'That username is already taken.' });
+    }
+    account.username = newUsername;
+  }
+  let newPlainPassword = null;
+  if (regenerate) {
+    newPlainPassword = generatePassword();
+  } else if (password && password.trim()) {
+    if (password.trim().length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+    newPlainPassword = password.trim();
+  }
+  if (newPlainPassword) {
+    account.passwordHash = bcrypt.hashSync(newPlainPassword, 8);
+    account.plainPassword = newPlainPassword;
+  }
+  db.save();
+  res.json({ account: { ...account, passwordHash: undefined } });
 });
 
 app.delete('/api/admin/merchants/:merchantId/accounts/:accountId', requireAdmin, (req, res) => {
@@ -653,6 +734,21 @@ app.delete('/api/admin/merchants/:merchantId/accounts/:accountId', requireAdmin,
   data.merchantAccounts = data.merchantAccounts.filter(a => a.id !== account.id);
   db.save();
   res.json({ ok: true });
+});
+
+app.patch('/api/admin/merchants/:id/commission', requireAdmin, (req, res) => {
+  const merchant = data.merchants.find(m => m.id === Number(req.params.id));
+  if (!merchant) return res.status(404).json({ error: 'Merchant not found.' });
+  const { rate } = req.body;
+  if (rate === null || rate === '' || rate === undefined) {
+    merchant.commissionRate = null;
+  } else {
+    const r = Number(rate);
+    if (isNaN(r) || r < 0 || r > 0.5) return res.status(400).json({ error: 'Commission rate must be between 0% and 50%.' });
+    merchant.commissionRate = r;
+  }
+  db.save();
+  res.json({ merchant });
 });
 
 app.patch('/api/admin/merchants/:id/logo', requireAdmin, (req, res) => {
@@ -702,7 +798,8 @@ app.get('/api/admin/offers/:id/detail', requireAdmin, (req, res) => {
   const sold = vouchers.length;
   const redeemed = vouchers.filter(v => v.status === 'redeemed').length;
   const revenue = money(vouchers.reduce((a, v) => a + v.price, 0));
-  const commission = money(revenue * COMMISSION_RATE);
+  const rate = commissionRateFor(merchant);
+  const commission = money(revenue * rate);
   const payout = money(revenue - commission);
   const buyerRows = vouchers.map(v => {
     const buyer = data.users.find(u => u.id === v.buyerId);
@@ -712,7 +809,7 @@ app.get('/api/admin/offers/:id/detail', requireAdmin, (req, res) => {
       isGift: !!v.giftedTo || !!v.recipientEmail || !!v.recipientPhone
     };
   }).sort((a, b) => b.createdAt - a.createdAt);
-  res.json({ offer, merchantName: merchant.name, sold, redeemed, revenue, commission, payout, commissionRate: COMMISSION_RATE, vouchers: buyerRows });
+  res.json({ offer, merchantName: merchant.name, sold, redeemed, revenue, commission, payout, commissionRate: rate, vouchers: buyerRows });
 });
 
 app.post('/api/admin/offers', requireAdmin, (req, res) => {
@@ -752,6 +849,199 @@ app.patch('/api/admin/offers/:id/toggle', requireAdmin, (req, res) => {
   offer.status = offer.status === 'Live' ? 'Paused' : 'Live';
   db.save();
   res.json({ offer });
+});
+
+/* ---------- Finance ---------- */
+function inRange(ts, from, to) {
+  if (from && ts < new Date(from).getTime()) return false;
+  if (to && ts > new Date(to).getTime() + 24 * 60 * 60 * 1000 - 1) return false;
+  return true;
+}
+
+function merchantOutstanding(merchantId) {
+  const myOffers = data.offers.filter(o => o.merchantId === merchantId);
+  const myOfferIds = myOffers.map(o => o.id);
+  const merchant = data.merchants.find(m => m.id === merchantId);
+  const rate = commissionRateFor(merchant);
+  const lifetimeRevenue = money(data.vouchers.filter(v => myOfferIds.includes(v.offerId)).reduce((a, v) => a + v.price, 0));
+  const lifetimeCommission = money(lifetimeRevenue * rate);
+  const lifetimeNetOwed = money(lifetimeRevenue - lifetimeCommission);
+  const totalPaid = money(data.payouts.filter(p => p.merchantId === merchantId).reduce((a, p) => a + p.amount, 0));
+  return { lifetimeRevenue, lifetimeCommission, lifetimeNetOwed, totalPaid, outstanding: money(lifetimeNetOwed - totalPaid) };
+}
+
+app.get('/api/admin/finance/overview', requireAdmin, (req, res) => {
+  const { from, to } = req.query;
+  const vouchersInRange = data.vouchers.filter(v => inRange(v.createdAt, from, to));
+  let gmv = 0, commissionTotal = 0;
+  vouchersInRange.forEach(v => {
+    const offer = data.offers.find(o => o.id === v.offerId);
+    const merchant = offer ? data.merchants.find(m => m.id === offer.merchantId) : null;
+    const rate = commissionRateFor(merchant);
+    gmv += v.price;
+    commissionTotal += v.price * rate;
+  });
+  gmv = money(gmv);
+  commissionTotal = money(commissionTotal);
+  const payoutOwedForPeriod = money(gmv - commissionTotal);
+  const totalOutstandingAllTime = money(data.merchants.reduce((a, m) => a + merchantOutstanding(m.id).outstanding, 0));
+
+  const byCategory = {};
+  vouchersInRange.forEach(v => {
+    const offer = data.offers.find(o => o.id === v.offerId);
+    const cat = offer ? offer.category : 'Unknown';
+    byCategory[cat] = (byCategory[cat] || 0) + v.price;
+  });
+  const categoryBreakdown = Object.entries(byCategory).map(([category, revenue]) => ({ category, revenue: money(revenue) })).sort((a, b) => b.revenue - a.revenue);
+
+  const merchantTotals = {};
+  vouchersInRange.forEach(v => {
+    const offer = data.offers.find(o => o.id === v.offerId);
+    if (!offer) return;
+    merchantTotals[offer.merchantId] = (merchantTotals[offer.merchantId] || 0) + v.price;
+  });
+  const topMerchants = Object.entries(merchantTotals)
+    .map(([id, revenue]) => ({ id: Number(id), name: (data.merchants.find(m => m.id === Number(id)) || {}).name || 'Unknown', revenue: money(revenue) }))
+    .sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+
+  res.json({
+    gmv, commissionTotal, payoutOwedForPeriod, totalOutstandingAllTime,
+    vouchersSold: vouchersInRange.length,
+    vouchersRedeemed: vouchersInRange.filter(v => v.status === 'redeemed').length,
+    categoryBreakdown, topMerchants
+  });
+});
+
+app.get('/api/admin/finance/merchants', requireAdmin, (req, res) => {
+  const { from, to } = req.query;
+  const rows = data.merchants.map(merchant => {
+    const myOfferIds = data.offers.filter(o => o.merchantId === merchant.id).map(o => o.id);
+    const periodVouchers = data.vouchers.filter(v => myOfferIds.includes(v.offerId) && inRange(v.createdAt, from, to));
+    const rate = commissionRateFor(merchant);
+    const periodRevenue = money(periodVouchers.reduce((a, v) => a + v.price, 0));
+    const periodCommission = money(periodRevenue * rate);
+    const periodPayout = money(periodRevenue - periodCommission);
+    const outstanding = merchantOutstanding(merchant.id);
+    return {
+      id: merchant.id, name: merchant.name, commissionRate: rate,
+      periodRevenue, periodCommission, periodPayout,
+      lifetimeOutstanding: outstanding.outstanding, totalPaid: outstanding.totalPaid
+    };
+  }).sort((a, b) => b.periodRevenue - a.periodRevenue);
+  res.json({ merchants: rows });
+});
+
+app.get('/api/admin/merchants/:id/payouts', requireAdmin, (req, res) => {
+  const merchantId = Number(req.params.id);
+  const payouts = data.payouts.filter(p => p.merchantId === merchantId).sort((a, b) => b.createdAt - a.createdAt);
+  res.json({ payouts, ...merchantOutstanding(merchantId) });
+});
+
+app.post('/api/admin/merchants/:id/payouts', requireAdmin, (req, res) => {
+  const merchantId = Number(req.params.id);
+  const merchant = data.merchants.find(m => m.id === merchantId);
+  if (!merchant) return res.status(404).json({ error: 'Merchant not found.' });
+  const { amount, note } = req.body;
+  const amt = Number(amount);
+  if (!amt || amt <= 0) return res.status(400).json({ error: 'Enter a valid payout amount.' });
+  const id = db.nextId('payout');
+  const payout = { id, merchantId, amount: money(amt), note: (note || '').trim().slice(0, 200), createdAt: Date.now() };
+  data.payouts.push(payout);
+  db.save();
+  res.json({ payout, ...merchantOutstanding(merchantId) });
+});
+
+app.get('/api/admin/merchants/:id/invoice', requireAdmin, (req, res) => {
+  const merchantId = Number(req.params.id);
+  const merchant = data.merchants.find(m => m.id === merchantId);
+  if (!merchant) return res.status(404).json({ error: 'Merchant not found.' });
+  const { from, to } = req.query;
+  const myOffers = data.offers.filter(o => o.merchantId === merchantId);
+  const myOfferIds = myOffers.map(o => o.id);
+  const vouchers = data.vouchers.filter(v => myOfferIds.includes(v.offerId) && inRange(v.createdAt, from, to));
+  const rate = commissionRateFor(merchant);
+
+  const perOffer = {};
+  vouchers.forEach(v => {
+    if (!perOffer[v.offerId]) perOffer[v.offerId] = { title: v.offerTitle, qty: 0, revenue: 0 };
+    perOffer[v.offerId].qty += 1;
+    perOffer[v.offerId].revenue += v.price;
+  });
+  const lineItems = Object.values(perOffer);
+  const revenue = money(vouchers.reduce((a, v) => a + v.price, 0));
+  const commission = money(revenue * rate);
+  const netPayout = money(revenue - commission);
+  const outstanding = merchantOutstanding(merchantId);
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="Waffer-Invoice-${merchant.name.replace(/[^a-zA-Z0-9]+/g, '-')}.pdf"`);
+
+  const doc = new PDFDocument({ margin: 50, size: 'A4' });
+  doc.pipe(res);
+
+  doc.rect(0, 0, doc.page.width, 90).fill('#00A86B');
+  doc.fillColor('#FFFFFF').fontSize(24).font('Helvetica-Bold').text('Waffer', 50, 30);
+  doc.fontSize(11).font('Helvetica').text('Merchant Payout Invoice', 50, 60);
+
+  doc.fillColor('#1E293B').fontSize(11).font('Helvetica').moveDown(3);
+  doc.font('Helvetica-Bold').text('Billed to:', 50, 115);
+  doc.font('Helvetica').text(merchant.name, 50, 132);
+  doc.text(merchant.contact || '', 50, 148);
+
+  const periodLabel = (from || to) ? `${from || 'start'} to ${to || 'today'}` : 'All time';
+  doc.font('Helvetica-Bold').text('Period:', 350, 115);
+  doc.font('Helvetica').text(periodLabel, 350, 132);
+  doc.text(`Generated: ${new Date().toLocaleDateString('en-GB')}`, 350, 148);
+
+  let y = 190;
+  doc.moveTo(50, y).lineTo(545, y).strokeColor('#E5E7EB').stroke();
+  y += 12;
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('#64748B');
+  doc.text('Offer', 50, y);
+  doc.text('Qty sold', 320, y, { width: 80, align: 'right' });
+  doc.text('Revenue', 440, y, { width: 105, align: 'right' });
+  y += 18;
+  doc.moveTo(50, y).lineTo(545, y).strokeColor('#E5E7EB').stroke();
+  y += 10;
+
+  doc.font('Helvetica').fontSize(10).fillColor('#1E293B');
+  if (lineItems.length === 0) {
+    doc.text('No sales in this period.', 50, y);
+    y += 20;
+  } else {
+    lineItems.forEach(item => {
+      doc.text(item.title, 50, y, { width: 260 });
+      doc.text(String(item.qty), 320, y, { width: 80, align: 'right' });
+      doc.text(`$${money(item.revenue)}`, 440, y, { width: 105, align: 'right' });
+      y += 20;
+    });
+  }
+
+  y += 10;
+  doc.moveTo(50, y).lineTo(545, y).strokeColor('#E5E7EB').stroke();
+  y += 16;
+
+  function summaryRow(label, value, bold) {
+    doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(11).fillColor('#1E293B');
+    doc.text(label, 350, y, { width: 100 });
+    doc.text(value, 440, y, { width: 105, align: 'right' });
+    y += 20;
+  }
+  summaryRow('Total revenue', `$${revenue}`);
+  summaryRow(`Waffer commission (${Math.round(rate * 100)}%)`, `-$${commission}`);
+  summaryRow('Net payout (this period)', `$${netPayout}`, true);
+  y += 8;
+  doc.moveTo(350, y).lineTo(545, y).strokeColor('#E5E7EB').stroke();
+  y += 12;
+  summaryRow('Already paid (lifetime)', `$${outstanding.totalPaid}`);
+  summaryRow('Outstanding balance', `$${outstanding.outstanding}`, true);
+
+  doc.fontSize(9).fillColor('#94A3B8').text(
+    'This invoice reflects vouchers sold through the Waffer platform. Payment is settled outside the platform. Contact Waffer support with any questions.',
+    50, 720, { width: 495 }
+  );
+
+  doc.end();
 });
 
 app.listen(PORT, () => {
