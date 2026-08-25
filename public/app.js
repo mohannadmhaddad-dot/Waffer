@@ -12,6 +12,9 @@ const catIcons = {
   'Spa & Beauty': '<svg class="thumb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 21c4-2 7-6 7-11a7 7 0 0 0-7-4 7 7 0 0 0-7 4c0 5 3 9 7 11z"/><path d="M12 21V8"/></svg>',
   'Medical Checkups': '<svg class="thumb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v18M3 12h18" stroke-linecap="round"/></svg>'
 };
+const defaultCatIcon = '<svg class="thumb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2l2.5 6.5L21 9l-5 4.5 1.5 7L12 17l-5.5 3.5L8 13.5 3 9l6.5-0.5L12 2z"/></svg>';
+
+let allCategories = [];
 
 let currentUser = null;
 let currentMerchant = null;
@@ -32,6 +35,15 @@ async function api(path, opts = {}) {
 }
 
 function esc(s) { return String(s == null ? '' : s).replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
+
+function toast(msg, type) {
+  const container = document.getElementById('toastContainer');
+  const el = document.createElement('div');
+  el.className = 'toast ' + (type === 'error' ? 'toast-error' : type === 'success' ? 'toast-success' : '');
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 4200);
+}
 
 function openModal(id) { document.getElementById(id).classList.add('active'); }
 function closeModal(id) { document.getElementById(id).classList.remove('active'); }
@@ -89,7 +101,7 @@ async function doResetPassword() {
   try {
     await api('/api/auth/reset-password', { method: 'POST', body: { token, newPassword } });
     closeModal('resetPasswordModal');
-    alert('Password updated. You can log in with your new password now.');
+    toast('Password updated. You can log in with your new password now.', 'success');
     openModal('authModal');
     setAuthTab('login');
     history.replaceState({}, '', location.pathname);
@@ -113,14 +125,26 @@ function renderAuthArea() {
   const el = document.getElementById('authArea');
   const walletBtn = document.getElementById('walletNavBtn');
   const adminBtn = document.getElementById('adminNavBtn');
+  const banner = document.getElementById('verifyBanner');
   if (currentUser) {
     el.innerHTML = `<button class="user-pill-btn" onclick="openProfile()">Hi, ${currentUser.name.split(' ')[0]}</button><button onclick="doLogout()">Log out</button>`;
     walletBtn.style.display = 'inline-block';
     adminBtn.style.display = currentUser.isAdmin ? 'inline-block' : 'none';
+    banner.style.display = (!currentUser.emailVerified && !currentUser.isAdmin) ? 'block' : 'none';
   } else {
     el.innerHTML = `<button onclick="openModal('authModal')">Log in</button>`;
     walletBtn.style.display = 'none';
     adminBtn.style.display = 'none';
+    banner.style.display = 'none';
+  }
+}
+
+async function resendVerification() {
+  try {
+    const { message } = await api('/api/auth/resend-verification', { method: 'POST' });
+    toast(message, 'success');
+  } catch (e) {
+    toast(e.message, 'error');
   }
 }
 
@@ -153,7 +177,9 @@ async function doRegister() {
     renderAuthArea();
     closeModal('authModal');
     if (claimedGifts > 0) {
-      alert(`Welcome! You had ${claimedGifts} gift voucher${claimedGifts > 1 ? 's' : ''} waiting for you — check "My vouchers".`);
+      toast(`Welcome! You had ${claimedGifts} gift voucher${claimedGifts > 1 ? 's' : ''} waiting for you — check "My vouchers".`, 'success');
+    } else {
+      toast('Account created. Check your email to verify your address.', 'success');
     }
   } catch (e) {
     showNotice('registerNotice', e.message, 'error');
@@ -305,9 +331,14 @@ async function openOfferById(id) {
 }
 
 /* ---------- Offers ---------- */
+async function loadCategories() {
+  const { categories } = await api('/api/categories');
+  allCategories = categories;
+}
+
 function renderChips() {
   const el = document.getElementById('categoryChips');
-  const cats = ["All", "Entertainment", "Restaurants", "Spa & Beauty", "Medical Checkups"];
+  const cats = ["All", ...allCategories];
   el.innerHTML = cats.map(c => `<button class="chip ${c === activeCategory ? 'active' : ''}" onclick="setCategory('${c}')">${c}</button>`).join('');
 }
 
@@ -317,7 +348,7 @@ function thumbContent(o) {
   if (o.merchantLogoUrl) {
     return `<img class="merchant-logo" src="${o.merchantLogoUrl}" alt="${o.merchantName} logo" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" /><span class="thumb-badge" style="display:none;">${o.merchantInitials || '??'}</span>`;
   }
-  return `${catIcons[o.category] || ''}<span class="thumb-badge">${o.merchantInitials || '??'}</span>`;
+  return `${catIcons[o.category] || defaultCatIcon}<span class="thumb-badge">${o.merchantInitials || '??'}</span>`;
 }
 
 async function renderOffers() {
@@ -407,12 +438,14 @@ function startGift() {
 
 async function completePurchase() {
   try {
-    const { total } = await api('/api/vouchers/purchase', { method: 'POST', body: { offerId: currentOffer.id, quantity: purchaseQty } });
+    const { vouchers, total } = await api('/api/vouchers/purchase', { method: 'POST', body: { offerId: currentOffer.id, quantity: purchaseQty } });
     closeModal('purchaseModal');
     renderOffers();
-    alert(`Payment confirmed for $${total}. Check "My vouchers" for your code${purchaseQty > 1 ? 's' : ''}.`);
+    document.getElementById('purchaseSuccessSummary').textContent = `${currentOffer.title} — $${total} total. A receipt has been emailed to you.`;
+    document.getElementById('purchaseSuccessCodes').innerHTML = vouchers.map(v => `<div class="purchase-code-row">${v.code}</div>`).join('');
+    openModal('purchaseSuccessModal');
   } catch (e) {
-    alert(e.message);
+    toast(e.message, 'error');
   }
 }
 
@@ -430,9 +463,9 @@ async function completeGift() {
     closeModal('giftModal');
     renderOffers();
     if (claimed) {
-      alert(`Gift sent to ${recipientName}.`);
+      toast(`Gift sent to ${recipientName}.`, 'success');
     } else {
-      alert(`Gift sent! They don't have a Waffer account yet, so we've emailed them to sign up and claim their voucher.`);
+      toast(`Gift sent! They don't have a Waffer account yet, so we've emailed them to sign up and claim their voucher.`, 'success');
     }
   } catch (e) {
     showNotice('giftNotice', e.message, 'error');
@@ -476,16 +509,11 @@ async function renderWallet() {
 }
 
 function showQR(code) {
-  window.__voucherLookup = window.__voucherLookup || {};
   document.getElementById('qrTitle').textContent = 'Voucher QR';
   document.getElementById('qrCode').textContent = code;
-  const pattern = document.getElementById('qrPattern');
-  pattern.innerHTML = '';
-  for (let i = 0; i < 25; i++) {
-    const cell = document.createElement('span');
-    cell.style.background = Math.random() > 0.42 ? '#FAFAFA' : '#1E293B';
-    pattern.appendChild(cell);
-  }
+  const container = document.getElementById('qrPattern');
+  container.innerHTML = '';
+  new QRCode(container, { text: code, width: 160, height: 160, colorDark: '#1E293B', colorLight: '#FFFFFF' });
   openModal('qrModal');
 }
 
@@ -503,12 +531,53 @@ async function redeemVoucher() {
 }
 
 /* ---------- Admin ---------- */
+async function renderCategoryManageList() {
+  const { categories } = await api('/api/admin/categories');
+  window.__categoriesCache = categories;
+  document.getElementById('categoryManageList').innerHTML = categories.map(c =>
+    `<div class="category-row"><span>${c.name}</span><button class="row-btn danger" onclick="deleteCategory(${c.id}, '${c.name.replace(/'/g, "\\'")}')">Delete</button></div>`
+  ).join('') || `<div class="empty">No categories yet.</div>`;
+  const options = categories.map(c => `<option>${c.name}</option>`).join('');
+  document.getElementById('nmCategory').innerHTML = options;
+  document.getElementById('eoCategory').innerHTML = options;
+}
+
+async function addCategory() {
+  clearNotice('categoryNotice');
+  const input = document.getElementById('newCategoryName');
+  const name = input.value.trim();
+  if (!name) { showNotice('categoryNotice', 'Enter a category name.', 'error'); return; }
+  try {
+    await api('/api/admin/categories', { method: 'POST', body: { name } });
+    input.value = '';
+    renderCategoryManageList();
+    loadCategories().then(renderChips);
+    toast('Category added.', 'success');
+  } catch (e) {
+    showNotice('categoryNotice', e.message, 'error');
+  }
+}
+
+async function deleteCategory(id, name) {
+  if (!confirm(`Delete "${name}"? Offers already using this category will keep it, but it won't be selectable for new ones.`)) return;
+  try {
+    const { wasInUse } = await api(`/api/admin/categories/${id}`, { method: 'DELETE' });
+    renderCategoryManageList();
+    loadCategories().then(renderChips);
+    toast(wasInUse ? 'Deleted. Some existing offers still reference it.' : 'Category deleted.', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
 async function renderAdmin() {
   const stats = await api('/api/admin/stats');
   document.getElementById('aGMV').textContent = '$' + stats.gmv;
   document.getElementById('aMerchants').textContent = stats.merchants;
   document.getElementById('aVouchers').textContent = stats.soldCount;
   document.getElementById('aRedeemed').textContent = stats.redeemed;
+
+  await renderCategoryManageList();
 
   const { merchants } = await api('/api/admin/merchants');
   document.getElementById('adminMerchantTable').innerHTML = merchants.map(m => `
@@ -596,7 +665,7 @@ async function openOfferDetail(id) {
     `;
     openModal('offerDetailModal');
   } catch (e) {
-    alert(e.message);
+    toast(e.message, 'error');
   }
 }
 
@@ -616,7 +685,7 @@ async function uploadLogo(merchantId, input) {
     renderAdmin();
     renderOffers();
   } catch (e) {
-    alert(e.message);
+    toast(e.message, 'error');
   }
 }
 
@@ -633,7 +702,8 @@ async function createMerchant() {
     document.getElementById('nmLogoUrl').value = '';
     closeModal('newMerchantModal');
     renderAdmin();
-    alert(`Merchant added. Their login: username "${merchant.username}", password "${tempPassword}" — share this with them.`);
+    document.getElementById('credentialsBox').innerHTML = `Business: <strong>${merchant.name}</strong><br/>Username: <strong>${merchant.username}</strong><br/>Password: <strong>${tempPassword}</strong>`;
+    openModal('credentialsModal');
   } catch (e) {
     showNotice('merchantNotice', e.message, 'error');
   }
@@ -672,13 +742,24 @@ document.getElementById('aiQuery').addEventListener('keyup', (e) => { if (e.key 
   populateCountryCodes();
   await refreshAuth();
   await refreshMerchantAuth();
+  await loadCategories();
   renderChips();
   renderOffers();
 
   const params = new URLSearchParams(location.search);
   const resetToken = params.get('resetToken');
+  const verifyToken = params.get('verifyToken');
   if (resetToken) {
     window.__resetToken = resetToken;
     openModal('resetPasswordModal');
+  } else if (verifyToken) {
+    try {
+      const { user } = await api('/api/auth/verify-email', { method: 'POST', body: { token: verifyToken } });
+      if (currentUser && currentUser.id === user.id) { currentUser = user; renderAuthArea(); }
+      toast('Email verified. Thanks!', 'success');
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+    history.replaceState({}, '', location.pathname);
   }
 })();
