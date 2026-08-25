@@ -122,20 +122,29 @@ async function refreshAuth() {
 }
 
 function renderAuthArea() {
-  const el = document.getElementById('authArea');
   const walletBtn = document.getElementById('walletNavBtn');
   const adminBtn = document.getElementById('adminNavBtn');
   const banner = document.getElementById('verifyBanner');
   if (currentUser) {
-    el.innerHTML = `<button class="user-pill-btn" onclick="openProfile()">Hi, ${currentUser.name.split(' ')[0]}</button><button onclick="doLogout()">Log out</button>`;
     walletBtn.style.display = 'inline-block';
     adminBtn.style.display = currentUser.isAdmin ? 'inline-block' : 'none';
     banner.style.display = (!currentUser.emailVerified && !currentUser.isAdmin) ? 'block' : 'none';
   } else {
-    el.innerHTML = `<button onclick="openModal('authModal')">Log in</button>`;
     walletBtn.style.display = 'none';
     adminBtn.style.display = 'none';
     banner.style.display = 'none';
+  }
+  renderTopAuthPill();
+}
+
+function renderTopAuthPill() {
+  const el = document.getElementById('authArea');
+  if (currentUser) {
+    el.innerHTML = `<button class="user-pill-btn" onclick="openProfile()">Hi, ${currentUser.name.split(' ')[0]}</button><button onclick="doLogout()">Log out</button>`;
+  } else if (currentMerchant) {
+    el.innerHTML = `<button onclick="doMerchantLogout()">Log out</button>`;
+  } else {
+    el.innerHTML = `<button onclick="openModal('authModal')">Log in</button>`;
   }
 }
 
@@ -171,8 +180,10 @@ async function doRegister() {
     const countryCode = document.getElementById('regCountryCode').value;
     const phone = document.getElementById('regPhone').value.trim();
     const password = document.getElementById('regPassword').value;
+    const gender = document.getElementById('regGender').value;
+    const birthday = document.getElementById('regBirthday').value;
     if (!name || !email || !phone || !password) { showNotice('registerNotice', 'Fill in name, email, mobile number and password.', 'error'); return; }
-    const { user, claimedGifts } = await api('/api/auth/register', { method: 'POST', body: { name, email, phone, countryCode, password } });
+    const { user, claimedGifts } = await api('/api/auth/register', { method: 'POST', body: { name, email, phone, countryCode, password, gender, birthday } });
     currentUser = user;
     renderAuthArea();
     closeModal('authModal');
@@ -269,6 +280,7 @@ function renderMerchantArea() {
     customerNavBtn.style.display = 'inline-block';
     merchantAuthArea.innerHTML = `<button class="merchant-login-link" onclick="switchView('merchant')">Merchant login</button>`;
   }
+  renderTopAuthPill();
 }
 
 function renderFrontDeskView() {
@@ -503,6 +515,7 @@ async function renderOffers() {
     return `
     <div class="offer-card">
       <div class="offer-thumb">${thumbContent(o)}</div>
+      <div class="offer-perforation"></div>
       <div class="offer-body">
         <div class="offer-cat">${o.category}</div>
         <div class="offer-title">${o.title}</div>
@@ -551,17 +564,6 @@ function openOffer(id) {
     <hr class="modal-divider" />
     <h3 style="font-size:15px;">Reviews</h3>
     <div id="reviewsList">Loading...</div>
-    ${currentUser ? `
-      <div style="margin-top:14px;">
-        <div class="field"><label>Your rating</label>
-          <select id="reviewRating"><option value="5">★★★★★ (5)</option><option value="4">★★★★☆ (4)</option><option value="3">★★★☆☆ (3)</option><option value="2">★★☆☆☆ (2)</option><option value="1">★☆☆☆☆ (1)</option></select>
-        </div>
-        <div class="field"><label>Comment (optional)</label><textarea id="reviewComment" placeholder="How was it?"></textarea></div>
-        <div class="inline-notice" id="reviewNotice"></div>
-        <button class="btn btn-secondary" onclick="submitReview(${id})">Submit review</button>
-        <p class="note">You can only review offers you've actually redeemed.</p>
-      </div>
-    ` : ''}
   `;
   openModal('offerModal');
   loadReviews(id);
@@ -580,21 +582,6 @@ async function loadReviews(offerId) {
       </div>
     `).join('');
   } catch (e) { /* ignore */ }
-}
-
-async function submitReview(offerId) {
-  clearNotice('reviewNotice');
-  const rating = document.getElementById('reviewRating').value;
-  const comment = document.getElementById('reviewComment').value.trim();
-  try {
-    await api(`/api/offers/${offerId}/reviews`, { method: 'POST', body: { rating, comment } });
-    toast('Review posted. Thanks!', 'success');
-    document.getElementById('reviewComment').value = '';
-    loadReviews(offerId);
-    renderOffers();
-  } catch (e) {
-    showNotice('reviewNotice', e.message, 'error');
-  }
 }
 
 function changeQty(delta) {
@@ -675,6 +662,7 @@ function expiryBadge(v) {
 /* ---------- Wallet ---------- */
 async function renderWallet() {
   const { vouchers } = await api('/api/vouchers/mine');
+  window.__myVouchersCache = vouchers;
   const el = document.getElementById('walletList');
   if (vouchers.length === 0) { el.innerHTML = `<div class="empty">No vouchers yet. Buy an offer to see it here.</div>`; }
   else {
@@ -684,7 +672,7 @@ async function renderWallet() {
           <h4>${v.offerTitle}${v.giftedTo ? ' <span style="font-weight:400;color:var(--muted);font-size:12px;">(gift)</span>' : ''}</h4>
           <div class="voucher-meta">${v.merchantName} &middot; ${v.discountPct != null ? v.discountPct + '% off' : ''} &middot; $${v.price}${v.expiryDate ? ' &middot; valid until ' + v.expiryDate : ''}</div>
           <div class="voucher-code-row">Code: <span class="voucher-code">${v.code}</span> ${expiryBadge(v)}</div>
-          ${v.status === 'redeemed' && !v.hasReviewed ? `<div style="margin-top:8px;"><button class="btn btn-secondary" onclick="openWalletReview(${v.offerId}, ${JSON.stringify(v.offerTitle)})">Rate this experience</button></div>` : ''}
+          ${v.status === 'redeemed' && !v.hasReviewed ? `<div style="margin-top:8px;"><button class="btn btn-secondary" onclick="openWalletReview(${v.offerId})">Rate this experience</button></div>` : ''}
         </div>
         <div style="display:flex;align-items:center;gap:10px;">
           <span class="status-pill status-${v.status}">${v.status}</span>
@@ -709,9 +697,10 @@ async function renderWallet() {
   `).join('');
 }
 
-function openWalletReview(offerId, offerTitle) {
+function openWalletReview(offerId) {
+  const v = (window.__myVouchersCache || []).find(x => x.offerId === offerId);
   document.getElementById('wrOfferId').value = offerId;
-  document.getElementById('walletReviewOfferTitle').textContent = offerTitle;
+  document.getElementById('walletReviewOfferTitle').textContent = v ? v.offerTitle : '';
   document.getElementById('wrComment').value = '';
   clearNotice('wrNotice');
   openModal('walletReviewModal');
@@ -1183,6 +1172,7 @@ document.getElementById('aiQuery').addEventListener('keyup', (e) => { if (e.key 
   const params = new URLSearchParams(location.search);
   const resetToken = params.get('resetToken');
   const verifyToken = params.get('verifyToken');
+  const claimEmail = params.get('claimEmail');
   if (resetToken) {
     window.__resetToken = resetToken;
     openModal('resetPasswordModal');
@@ -1194,6 +1184,12 @@ document.getElementById('aiQuery').addEventListener('keyup', (e) => { if (e.key 
     } catch (e) {
       toast(e.message, 'error');
     }
+    history.replaceState({}, '', location.pathname);
+  } else if (claimEmail && !currentUser) {
+    openModal('authModal');
+    setAuthTab('register');
+    document.getElementById('regEmail').value = decodeURIComponent(claimEmail);
+    toast('Create your account with this email to claim your gift!', 'success');
     history.replaceState({}, '', location.pathname);
   }
 })();
