@@ -9,10 +9,17 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="styles.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 <body>
 
 <div class="demo-banner"><strong>Preview build.</strong> Businesses shown are for illustration only and have not yet partnered with Waffer.</div>
+<div class="verify-banner" id="verifyBanner" style="display:none;">
+  Please verify your email address. <a href="#" onclick="resendVerification();return false;">Resend verification email</a>
+  <button class="verify-banner-close" onclick="document.getElementById('verifyBanner').style.display='none';">&times;</button>
+</div>
+
+<div id="toastContainer"></div>
 
 <header class="topbar">
   <div class="topbar-inner">
@@ -121,6 +128,15 @@
       <div class="stat-card"><div class="stat-label">Merchants onboarded</div><div class="stat-value" id="aMerchants">0</div></div>
       <div class="stat-card"><div class="stat-label">Vouchers sold</div><div class="stat-value" id="aVouchers">0</div></div>
       <div class="stat-card"><div class="stat-label">Redeemed</div><div class="stat-value" id="aRedeemed">0</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3 style="margin:0;">Categories</h3></div>
+      <div id="categoryManageList"></div>
+      <div class="two-col" style="margin-top:14px;">
+        <div class="field" style="margin-bottom:0;"><label>New category name</label><input id="newCategoryName" placeholder="e.g. Fitness & Gyms" /></div>
+        <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" style="height:41px;" onclick="addCategory()">Add category</button></div>
+      </div>
+      <div class="inline-notice" id="categoryNotice"></div>
     </div>
     <div class="panel">
       <div class="panel-head"><h3 style="margin:0;">Merchants</h3><button class="btn btn-primary" onclick="openModal('newMerchantModal')">+ Add merchant</button></div>
@@ -245,9 +261,32 @@
   <div class="modal" style="max-width:340px;text-align:center;">
     <button class="modal-close" onclick="closeModal('qrModal')">&times;</button>
     <h3 id="qrTitle" style="margin-top:10px;"></h3>
-    <div style="display:flex;justify-content:center;margin:16px 0;"><div class="qr-block" id="qrPattern"></div></div>
+    <div style="display:flex;justify-content:center;margin:16px 0;"><div id="qrPattern"></div></div>
     <div class="voucher-code" id="qrCode" style="font-size:16px;"></div>
     <p class="note">Show this code to the merchant at redemption.</p>
+  </div>
+</div>
+
+<!-- Purchase success modal -->
+<div class="modal-overlay" id="purchaseSuccessModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('purchaseSuccessModal')">&times;</button>
+    <div class="success-icon">✓</div>
+    <h3 style="text-align:center;">Payment confirmed</h3>
+    <p class="note" style="text-align:center;margin-bottom:16px;" id="purchaseSuccessSummary"></p>
+    <div id="purchaseSuccessCodes"></div>
+    <button class="btn btn-primary btn-block" onclick="closeModal('purchaseSuccessModal');switchView('wallet');">View my vouchers</button>
+  </div>
+</div>
+
+<!-- Merchant credentials modal -->
+<div class="modal-overlay" id="credentialsModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('credentialsModal')">&times;</button>
+    <h3>Merchant added</h3>
+    <p class="note" style="margin-bottom:14px;">Share these login details with the business:</p>
+    <div class="credentials-box" id="credentialsBox"></div>
+    <button class="btn btn-primary btn-block" onclick="closeModal('credentialsModal')">Done</button>
   </div>
 </div>
 
@@ -257,7 +296,7 @@
     <button class="modal-close" onclick="closeModal('newMerchantModal')">&times;</button>
     <h3>Add a merchant</h3>
     <div class="field"><label>Business name</label><input id="nmName" /></div>
-    <div class="field"><label>Category</label><select id="nmCategory"><option>Entertainment</option><option>Restaurants</option><option>Spa &amp; Beauty</option><option>Medical Checkups</option></select></div>
+    <div class="field"><label>Category</label><select id="nmCategory"></select></div>
     <div class="field"><label>WhatsApp / contact</label><input id="nmContact" placeholder="+961 XX XXX XXX" /></div>
     <div class="field"><label>Logo URL (optional)</label><input id="nmLogoUrl" placeholder="https://... (paste once the merchant provides one)" /></div>
     <div class="inline-notice" id="merchantNotice"></div>
@@ -286,7 +325,7 @@
     <button class="modal-close" onclick="closeModal('editOfferModal')">&times;</button>
     <h3>Edit offer</h3>
     <input type="hidden" id="eoId" />
-    <div class="field"><label>Category</label><select id="eoCategory"><option>Entertainment</option><option>Restaurants</option><option>Spa &amp; Beauty</option><option>Medical Checkups</option></select></div>
+    <div class="field"><label>Category</label><select id="eoCategory"></select></div>
     <div class="field"><label>Offer title</label><input id="eoTitle" /></div>
     <div class="two-col"><div class="field"><label>Original price (USD)</label><input id="eoOriginal" type="number" /></div><div class="field"><label>Voucher price (USD)</label><input id="eoPrice" type="number" /></div></div>
     <div class="field"><label>Valid until</label><input id="eoExpiry" type="date" /></div>
