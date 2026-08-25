@@ -253,6 +253,7 @@ function renderMerchantArea() {
     loggedIn.style.display = 'block';
     merchantNavBtn.style.display = 'inline-block';
     customerNavBtn.style.display = 'none';
+    document.getElementById('walletNavBtn').style.display = 'none';
     merchantAuthArea.innerHTML = `<span class="merchant-badge">${currentMerchant.merchantName}${currentMerchant.location ? ' — ' + currentMerchant.location : ''}</span>`;
     if (currentMerchant.role === 'manager') {
       renderManagerDashboard();
@@ -396,6 +397,9 @@ async function changeMerchantPassword() {
 
 /* ---------- Nav ---------- */
 function switchView(view) {
+  if (currentMerchant && (view === 'customer' || view === 'wallet')) {
+    view = 'merchant';
+  }
   document.querySelectorAll('.topnav button').forEach(b => b.classList.remove('active'));
   const navBtn = document.querySelector(`.topnav [data-view="${view}"]`);
   if (navBtn) navBtn.classList.add('active');
