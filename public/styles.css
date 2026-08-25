@@ -114,6 +114,9 @@ main{padding:28px 0 60px;}
 .status-pending-claim{background:#FFF3E0;color:#B45309;}
 .offer-link{color:var(--brand-dark);font-weight:600;text-decoration:none;}
 .offer-link:hover{text-decoration:underline;}
+.category-row{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border);font-size:14px;}
+.category-row:last-child{border-bottom:none;}
+.row-btn.danger{color:var(--danger);}
 .voucher-code{font-family:'Courier New',monospace;font-weight:700;font-size:13px;color:var(--text);letter-spacing:1px;}
 .qr-block{width:140px;height:140px;background:var(--text);border-radius:8px;flex-shrink:0;display:grid;grid-template-columns:repeat(5,1fr);grid-template-rows:repeat(5,1fr);gap:2px;padding:6px;}
 .qr-block span{background:var(--card);border-radius:1px;}
@@ -136,4 +139,19 @@ td{padding:10px;border-bottom:1px solid var(--border);}
 .lean-note{background:#FFF3E0;border:1px solid #FFD9A8;color:#92400E;padding:12px 16px;border-radius:10px;font-size:13px;margin-bottom:22px;}
 .demo-banner{background:var(--text);color:#E2E8F0;text-align:center;font-size:12.5px;padding:7px 16px;letter-spacing:0.2px;}
 .demo-banner strong{color:#FFB088;}
+.verify-banner{background:#FFF3E0;color:#92400E;text-align:center;font-size:13px;padding:8px 16px;position:relative;}
+.verify-banner a{color:#92400E;font-weight:700;text-decoration:underline;}
+.verify-banner-close{position:absolute;right:14px;top:6px;background:transparent;color:#92400E;font-size:16px;padding:2px 6px;}
+
+#toastContainer{position:fixed;bottom:20px;right:20px;z-index:200;display:flex;flex-direction:column;gap:10px;}
+.toast{background:var(--text);color:#fff;padding:12px 18px;border-radius:8px;font-size:13.5px;box-shadow:0 4px 16px rgba(0,0,0,0.2);max-width:320px;animation:toastIn 0.2s ease;}
+.toast.toast-success{background:var(--brand-dark);}
+.toast.toast-error{background:var(--danger);}
+@keyframes toastIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+
+.success-icon{width:52px;height:52px;border-radius:50%;background:var(--brand-light);color:var(--brand-dark);font-size:26px;font-weight:700;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;}
+.purchase-code-row{background:var(--bg);border-radius:8px;padding:10px 14px;margin-bottom:8px;font-family:'Courier New',monospace;font-weight:700;font-size:14px;color:var(--text);text-align:center;letter-spacing:1px;}
+.credentials-box{background:var(--bg);border-radius:8px;padding:14px 16px;margin-bottom:16px;font-size:14px;line-height:1.9;}
+.credentials-box strong{color:var(--brand-dark);}
+
 footer{text-align:center;padding:24px;color:var(--muted);font-size:12px;border-top:1px solid var(--border);}
