@@ -109,7 +109,7 @@ function requireMerchant(req, res, next) {
 }
 
 function publicUser(u) {
-  return { id: u.id, name: u.name, email: u.email, phone: u.phone, gender: u.gender || null, birthday: u.birthday || null, isAdmin: u.isAdmin };
+  return { id: u.id, name: u.name, email: u.email, phone: u.phone, gender: u.gender || null, birthday: u.birthday || null, isAdmin: u.isAdmin, emailVerified: u.emailVerified !== false };
 }
 
 function publicMerchant(m) {
@@ -132,9 +132,11 @@ app.post('/api/auth/register', (req, res) => {
   }
   const id = db.nextId('user');
   const passwordHash = bcrypt.hashSync(password, 8);
+  const verifyToken = crypto.randomBytes(24).toString('hex');
   const user = {
     id, name, email, phone: fullPhone, passwordHash, isAdmin: false, createdAt: Date.now(),
-    gender: null, birthday: null, resetToken: null, resetTokenExpiry: null
+    gender: null, birthday: null, resetToken: null, resetTokenExpiry: null,
+    emailVerified: false, verifyToken
   };
   data.users.push(user);
 
@@ -155,6 +157,11 @@ app.post('/api/auth/register', (req, res) => {
   });
   db.save();
   req.session.userId = id;
+
+  const verifyLink = `${originOf(req)}/?verifyToken=${verifyToken}`;
+  sendEmail(email, 'Verify your Waffer email',
+    `<p>Hi ${name},</p><p>Welcome to Waffer! Confirm your email address by clicking the link below.</p><p><a href="${verifyLink}">${verifyLink}</a></p>`);
+
   res.json({ user: publicUser(user), claimedGifts: claimedCount });
 });
 
@@ -215,6 +222,28 @@ app.post('/api/auth/reset-password', (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/auth/verify-email', (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: 'Missing verification token.' });
+  const user = data.users.find(u => u.verifyToken === token);
+  if (!user) return res.status(400).json({ error: 'This verification link is invalid or has already been used.' });
+  user.emailVerified = true;
+  user.verifyToken = null;
+  db.save();
+  res.json({ ok: true, user: publicUser(user) });
+});
+
+app.post('/api/auth/resend-verification', requireAuth, async (req, res) => {
+  if (req.user.emailVerified) return res.json({ ok: true, message: 'Your email is already verified.' });
+  const token = crypto.randomBytes(24).toString('hex');
+  req.user.verifyToken = token;
+  db.save();
+  const verifyLink = `${originOf(req)}/?verifyToken=${token}`;
+  await sendEmail(req.user.email, 'Verify your Waffer email',
+    `<p>Hi ${req.user.name},</p><p>Confirm your email address by clicking the link below.</p><p><a href="${verifyLink}">${verifyLink}</a></p>`);
+  res.json({ ok: true, message: 'Verification email sent.' });
+});
+
 /* ---------- Merchant auth ---------- */
 app.post('/api/merchant/login', (req, res) => {
   const { username, password } = req.body;
@@ -254,6 +283,11 @@ app.get('/api/merchant/dashboard', requireMerchant, (req, res) => {
     return { code: v.code, offerTitle: v.offerTitle, buyerName: buyer ? buyer.name : 'Unknown', price: v.price, status: v.status, createdAt: v.createdAt, redeemedAt: v.redeemedAt };
   }).sort((a, b) => b.createdAt - a.createdAt).slice(0, 100);
   res.json({ sold, redeemed, revenue, commission, payout, commissionRate: COMMISSION_RATE, offers: offerBreakdown, recent });
+});
+
+/* ---------- Categories (public read) ---------- */
+app.get('/api/categories', (req, res) => {
+  res.json({ categories: data.categories.map(c => c.name) });
 });
 
 /* ---------- Offers (public read) ---------- */
@@ -343,6 +377,16 @@ app.post('/api/vouchers/purchase', requireAuth, (req, res) => {
   }
   offer.sold += qty;
   db.save();
+
+  const codeList = vouchers.map(v => `<li><strong>${v.code}</strong></li>`).join('');
+  sendEmail(req.user.email, 'Your Waffer purchase confirmation',
+    `<p>Hi ${req.user.name},</p><p>Thanks for your purchase! Here's your receipt:</p>
+     <p><strong>${offer.title}</strong> from ${merchant.name || 'the merchant'}<br/>
+     ${qty} voucher${qty > 1 ? 's' : ''} &times; $${offer.price} = $${money(offer.price * qty)}</p>
+     <p>Your code${qty > 1 ? 's' : ''}:</p><ul>${codeList}</ul>
+     <p>Valid until: ${offer.expiryDate || 'no expiry set'}</p>
+     <p>Find these anytime in your Waffer wallet.</p>`);
+
   res.json({ vouchers, total: money(offer.price * qty) });
 });
 
@@ -419,6 +463,33 @@ app.post('/api/vouchers/redeem', requireMerchant, (req, res) => {
 });
 
 /* ---------- Admin ---------- */
+app.get('/api/admin/categories', requireAdmin, (req, res) => {
+  res.json({ categories: data.categories });
+});
+
+app.post('/api/admin/categories', requireAdmin, (req, res) => {
+  const { name } = req.body;
+  const trimmed = (name || '').trim();
+  if (!trimmed) return res.status(400).json({ error: 'Enter a category name.' });
+  if (data.categories.some(c => c.name.toLowerCase() === trimmed.toLowerCase())) {
+    return res.status(400).json({ error: 'That category already exists.' });
+  }
+  const id = db.nextId('category');
+  const category = { id, name: trimmed };
+  data.categories.push(category);
+  db.save();
+  res.json({ category });
+});
+
+app.delete('/api/admin/categories/:id', requireAdmin, (req, res) => {
+  const category = data.categories.find(c => c.id === Number(req.params.id));
+  if (!category) return res.status(404).json({ error: 'Category not found.' });
+  const inUse = data.offers.some(o => o.category === category.name) || data.merchants.some(m => m.category === category.name);
+  data.categories = data.categories.filter(c => c.id !== category.id);
+  db.save();
+  res.json({ ok: true, wasInUse: inUse });
+});
+
 app.get('/api/admin/stats', requireAdmin, (req, res) => {
   const gmv = data.offers.reduce((a, o) => a + o.sold * o.price, 0);
   const soldCount = data.offers.reduce((a, o) => a + o.sold, 0);
