@@ -62,6 +62,18 @@
     </div>
 
     <div class="chips" id="categoryChips"></div>
+    <div class="filter-row">
+      <input id="minPrice" type="number" placeholder="Min $" />
+      <input id="maxPrice" type="number" placeholder="Max $" />
+      <select id="sortSelect">
+        <option value="">Sort: Featured</option>
+        <option value="price_asc">Price: Low to High</option>
+        <option value="price_desc">Price: High to Low</option>
+        <option value="newest">Newest</option>
+        <option value="popular">Most Popular</option>
+      </select>
+      <button class="btn btn-secondary" onclick="renderOffers()">Apply</button>
+    </div>
     <div class="grid" id="offerGrid"></div>
   </section>
 
@@ -85,37 +97,15 @@
       </div>
     </div>
     <div id="merchantLoggedIn" style="display:none;">
-      <h2 id="merchantDashTitle">Dashboard</h2>
-      <div class="stat-grid">
-        <div class="stat-card"><div class="stat-label">Vouchers sold</div><div class="stat-value" id="mdSold">0</div></div>
-        <div class="stat-card"><div class="stat-label">Redeemed</div><div class="stat-value" id="mdRedeemed">0</div></div>
-        <div class="stat-card"><div class="stat-label">Sales volume</div><div class="stat-value" id="mdRevenue">$0</div></div>
-        <div class="stat-card"><div class="stat-label">Your payout</div><div class="stat-value" id="mdPayout">$0</div></div>
-      </div>
-      <p class="note" id="mdCommissionNote" style="margin-bottom:20px;"></p>
-
+      <div id="merchantLoggedInContent"></div>
       <div class="panel">
-        <h3 style="margin-bottom:14px;">Your offers</h3>
-        <table><thead><tr><th>Offer</th><th>Sold</th><th>Redeemed</th><th>Revenue</th></tr></thead><tbody id="mdOffersTable"></tbody></table>
-      </div>
-
-      <div class="panel">
-        <h3 style="margin-bottom:14px;">Recent sales</h3>
-        <table><thead><tr><th>Voucher</th><th>Buyer</th><th>Price</th><th>Status</th><th>Date</th></tr></thead><tbody id="mdRecentTable"></tbody></table>
-      </div>
-
-      <div class="panel">
-        <h3 style="margin-bottom:14px;">Redeem a voucher</h3>
+        <h3 style="margin-bottom:14px;">Change password</h3>
         <div class="two-col">
-          <div class="field" style="margin-bottom:0;">
-            <label>Voucher code</label>
-            <input id="redeemInput" placeholder="e.g. WQ-8F2K91" />
-          </div>
-          <div style="display:flex;align-items:flex-end;">
-            <button class="btn btn-primary" style="height:41px;" onclick="redeemVoucher()">Verify &amp; redeem</button>
-          </div>
+          <div class="field"><label>Current password</label><input id="merCurrentPassword" type="password" /></div>
+          <div class="field"><label>New password</label><input id="merNewPassword" type="password" /></div>
         </div>
-        <div class="inline-notice" id="redeemNotice"></div>
+        <div class="inline-notice" id="merPasswordNotice"></div>
+        <button class="btn btn-secondary" onclick="changeMerchantPassword()">Update password</button>
       </div>
       <button class="btn btn-secondary" onclick="doMerchantLogout()">Log out</button>
     </div>
@@ -140,18 +130,18 @@
     </div>
     <div class="panel">
       <div class="panel-head"><h3 style="margin:0;">Merchants</h3><button class="btn btn-primary" onclick="openModal('newMerchantModal')">+ Add merchant</button></div>
-      <table><thead><tr><th>Logo</th><th>Business</th><th>Category</th><th>Username</th><th></th></tr></thead><tbody id="adminMerchantTable"></tbody></table>
+      <table><thead><tr><th>Logo</th><th>Business</th><th>Category</th><th></th><th></th></tr></thead><tbody id="adminMerchantTable"></tbody></table>
     </div>
     <div class="panel">
       <div class="panel-head"><h3 style="margin:0;">Offers</h3><button class="btn btn-primary" onclick="openNewOfferModal()">+ Create offer</button></div>
       <p class="note" style="margin-top:-10px;margin-bottom:14px;">Click an offer's title to see full sales details.</p>
-      <table><thead><tr><th>Offer</th><th>Merchant</th><th>Price</th><th>Sold</th><th>Status</th><th></th></tr></thead><tbody id="adminOfferTable"></tbody></table>
+      <table><thead><tr><th>Photo</th><th>Offer</th><th>Merchant</th><th>Price</th><th>Rating</th><th>Sold</th><th>Status</th><th></th></tr></thead><tbody id="adminOfferTable"></tbody></table>
     </div>
   </section>
 
 </main>
 
-<footer>Waffer — real working build. Payment is simulated; connect Whish before taking live transactions.</footer>
+<footer>Waffer — real working build. Payment is simulated; connect Whish before taking live transactions.<br/><a href="#" onclick="openModal('termsModal');return false;" style="color:var(--muted);">Terms of Service</a> &middot; <a href="#" onclick="openModal('privacyModal');return false;" style="color:var(--muted);">Privacy Policy</a></footer>
 
 <!-- Auth modal -->
 <div class="modal-overlay" id="authModal">
@@ -222,6 +212,12 @@
     <div class="field"><label>Birthday</label><input id="profBirthday" type="date" /></div>
     <div class="inline-notice" id="profileNotice"></div>
     <button class="btn btn-primary btn-block" onclick="saveProfile()">Save changes</button>
+    <hr class="modal-divider" />
+    <h3 style="font-size:16px;">Change password</h3>
+    <div class="field"><label>Current password</label><input id="profCurrentPassword" type="password" /></div>
+    <div class="field"><label>New password</label><input id="profNewPassword" type="password" /></div>
+    <div class="inline-notice" id="passwordNotice"></div>
+    <button class="btn btn-secondary btn-block" onclick="changeMyPassword()">Update password</button>
   </div>
 </div>
 
@@ -335,11 +331,60 @@
   </div>
 </div>
 
+<!-- Admin: manage merchant accounts (manager + front desk) -->
+<div class="modal-overlay" id="accountsModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('accountsModal')">&times;</button>
+    <h3 id="accountsModalTitle">Staff accounts</h3>
+    <div id="accountsList"></div>
+    <hr class="modal-divider" />
+    <h3 style="font-size:15px;">Add a front desk account</h3>
+    <p class="note" style="margin-top:0;margin-bottom:10px;">One per branch/location. Front desk accounts can only redeem vouchers — no sales data.</p>
+    <div class="two-col">
+      <div class="field" style="margin-bottom:0;"><label>Branch / location name</label><input id="newLocationName" placeholder="e.g. Hamra Branch" /></div>
+      <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" style="height:41px;" onclick="addFrontDeskAccount()">Add</button></div>
+    </div>
+    <div class="inline-notice" id="accountsNotice"></div>
+  </div>
+</div>
+
 <!-- Admin: offer detail -->
 <div class="modal-overlay" id="offerDetailModal">
   <div class="modal" style="max-width:640px;">
     <button class="modal-close" onclick="closeModal('offerDetailModal')">&times;</button>
     <div id="offerDetailBody"></div>
+  </div>
+</div>
+
+<!-- Terms of Service -->
+<div class="modal-overlay" id="termsModal">
+  <div class="modal" style="max-width:600px;">
+    <button class="modal-close" onclick="closeModal('termsModal')">&times;</button>
+    <h3>Terms of Service</h3>
+    <div class="legal-text">
+      <p><strong>1. About Waffer.</strong> Waffer is a marketplace connecting customers with discounted vouchers from independent businesses in Lebanon. Waffer facilitates the sale of vouchers but is not the provider of the underlying goods or services.</p>
+      <p><strong>2. Purchases.</strong> All voucher sales are final. Vouchers must be redeemed before their stated expiry date. Waffer is not responsible for a merchant's ability to honor a voucher.</p>
+      <p><strong>3. Gifting.</strong> Vouchers sent as gifts may be claimed by the intended recipient using the email or phone number provided at the time of gifting.</p>
+      <p><strong>4. Accounts.</strong> You are responsible for maintaining the confidentiality of your account credentials and for all activity under your account.</p>
+      <p><strong>5. Merchant relationships.</strong> Businesses listed on Waffer are independent third parties. Waffer is not liable for the quality, safety, or availability of any merchant's goods or services.</p>
+      <p><strong>6. Changes.</strong> These terms may be updated from time to time. Continued use of Waffer after changes constitutes acceptance of the revised terms.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Privacy Policy -->
+<div class="modal-overlay" id="privacyModal">
+  <div class="modal" style="max-width:600px;">
+    <button class="modal-close" onclick="closeModal('privacyModal')">&times;</button>
+    <h3>Privacy Policy</h3>
+    <div class="legal-text">
+      <p><strong>1. Information we collect.</strong> When you create an account, we collect your name, email address, phone number, and optionally your gender and birthday. We also record your purchase and voucher redemption history.</p>
+      <p><strong>2. How we use it.</strong> Your information is used to process purchases, deliver vouchers and gifts, send account-related emails (verification, password resets, receipts), and improve the Waffer platform.</p>
+      <p><strong>3. Sharing.</strong> We share limited purchase information (such as your name) with the merchant whose voucher you purchase, so they can verify redemption. We do not sell your personal data to third parties.</p>
+      <p><strong>4. Email communications.</strong> We send transactional emails related to your account and purchases. You can control marketing communications separately if introduced in future.</p>
+      <p><strong>5. Your rights.</strong> You may request access to, correction of, or deletion of your personal data by contacting Waffer support.</p>
+      <p><strong>6. Security.</strong> We take reasonable measures to protect your data, including password hashing and secure sessions.</p>
+    </div>
   </div>
 </div>
 
