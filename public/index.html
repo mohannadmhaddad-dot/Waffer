@@ -31,11 +31,12 @@
       <span class="logo-word">Waffer</span>
     </div>
     <nav class="topnav" id="topnav">
-      <button data-view="customer" class="active">Browse</button>
+      <button data-view="customer" id="customerNavBtn" class="active">Browse</button>
       <button data-view="wallet" id="walletNavBtn" style="display:none;">My vouchers</button>
-      <button data-view="merchant">Merchant redeem</button>
+      <button data-view="merchant" id="merchantNavBtn" style="display:none;">Merchant redeem</button>
       <button data-view="admin" id="adminNavBtn" style="display:none;">Admin</button>
     </nav>
+    <div id="merchantAuthArea"></div>
     <div id="authArea"></div>
   </div>
 </header>
@@ -113,29 +114,78 @@
 
   <section class="view" id="view-admin">
     <h2>Admin panel</h2>
-    <div class="stat-grid">
-      <div class="stat-card"><div class="stat-label">GMV (USD)</div><div class="stat-value" id="aGMV">$0</div></div>
-      <div class="stat-card"><div class="stat-label">Merchants onboarded</div><div class="stat-value" id="aMerchants">0</div></div>
-      <div class="stat-card"><div class="stat-label">Vouchers sold</div><div class="stat-value" id="aVouchers">0</div></div>
-      <div class="stat-card"><div class="stat-label">Redeemed</div><div class="stat-value" id="aRedeemed">0</div></div>
+    <div class="mini-tabs" style="max-width:520px;">
+      <button class="active" data-admintab="overview" onclick="setAdminTab('overview')">Overview</button>
+      <button data-admintab="categories" onclick="setAdminTab('categories')">Categories</button>
+      <button data-admintab="merchants" onclick="setAdminTab('merchants')">Merchants</button>
+      <button data-admintab="offers" onclick="setAdminTab('offers')">Offers</button>
+      <button data-admintab="finance" onclick="setAdminTab('finance')">Finance</button>
     </div>
-    <div class="panel">
-      <div class="panel-head"><h3 style="margin:0;">Categories</h3></div>
-      <div id="categoryManageList"></div>
-      <div class="two-col" style="margin-top:14px;">
-        <div class="field" style="margin-bottom:0;"><label>New category name</label><input id="newCategoryName" placeholder="e.g. Fitness & Gyms" /></div>
-        <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" style="height:41px;" onclick="addCategory()">Add category</button></div>
+
+    <div id="admin-tab-overview" class="admin-tab-panel">
+      <div class="stat-grid">
+        <div class="stat-card"><div class="stat-label">GMV (USD)</div><div class="stat-value" id="aGMV">$0</div></div>
+        <div class="stat-card"><div class="stat-label">Merchants onboarded</div><div class="stat-value" id="aMerchants">0</div></div>
+        <div class="stat-card"><div class="stat-label">Vouchers sold</div><div class="stat-value" id="aVouchers">0</div></div>
+        <div class="stat-card"><div class="stat-label">Redeemed</div><div class="stat-value" id="aRedeemed">0</div></div>
       </div>
-      <div class="inline-notice" id="categoryNotice"></div>
     </div>
-    <div class="panel">
-      <div class="panel-head"><h3 style="margin:0;">Merchants</h3><button class="btn btn-primary" onclick="openModal('newMerchantModal')">+ Add merchant</button></div>
-      <table><thead><tr><th>Logo</th><th>Business</th><th>Category</th><th></th><th></th></tr></thead><tbody id="adminMerchantTable"></tbody></table>
+
+    <div id="admin-tab-categories" class="admin-tab-panel" style="display:none;">
+      <div class="panel">
+        <div class="panel-head"><h3 style="margin:0;">Categories</h3></div>
+        <div id="categoryManageList"></div>
+        <div class="two-col" style="margin-top:14px;">
+          <div class="field" style="margin-bottom:0;"><label>New category name</label><input id="newCategoryName" placeholder="e.g. Fitness & Gyms" /></div>
+          <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" style="height:41px;" onclick="addCategory()">Add category</button></div>
+        </div>
+        <div class="inline-notice" id="categoryNotice"></div>
+      </div>
     </div>
-    <div class="panel">
-      <div class="panel-head"><h3 style="margin:0;">Offers</h3><button class="btn btn-primary" onclick="openNewOfferModal()">+ Create offer</button></div>
-      <p class="note" style="margin-top:-10px;margin-bottom:14px;">Click an offer's title to see full sales details.</p>
-      <table><thead><tr><th>Photo</th><th>Offer</th><th>Merchant</th><th>Price</th><th>Rating</th><th>Sold</th><th>Status</th><th></th></tr></thead><tbody id="adminOfferTable"></tbody></table>
+
+    <div id="admin-tab-merchants" class="admin-tab-panel" style="display:none;">
+      <div class="panel">
+        <div class="panel-head"><h3 style="margin:0;">Merchants</h3><button class="btn btn-primary" onclick="openModal('newMerchantModal')">+ Add merchant</button></div>
+        <table><thead><tr><th>Logo</th><th>Business</th><th>Category</th><th>Commission</th><th></th><th></th></tr></thead><tbody id="adminMerchantTable"></tbody></table>
+      </div>
+    </div>
+
+    <div id="admin-tab-offers" class="admin-tab-panel" style="display:none;">
+      <div class="panel">
+        <div class="panel-head"><h3 style="margin:0;">Offers</h3><button class="btn btn-primary" onclick="openNewOfferModal()">+ Create offer</button></div>
+        <p class="note" style="margin-top:-10px;margin-bottom:14px;">Click an offer's title to see full sales details.</p>
+        <table><thead><tr><th>Photo</th><th>Offer</th><th>Merchant</th><th>Price</th><th>Rating</th><th>Sold</th><th>Status</th><th></th></tr></thead><tbody id="adminOfferTable"></tbody></table>
+      </div>
+    </div>
+
+    <div id="admin-tab-finance" class="admin-tab-panel" style="display:none;">
+      <div class="panel">
+        <div class="panel-head"><h3 style="margin:0;">Date range</h3></div>
+        <div class="two-col">
+          <div class="field" style="margin-bottom:0;"><label>From</label><input id="finFrom" type="date" /></div>
+          <div class="field" style="margin-bottom:0;"><label>To</label><input id="finTo" type="date" /></div>
+        </div>
+        <button class="btn btn-secondary" style="margin-top:12px;" onclick="loadFinance()">Apply</button>
+        <button class="btn btn-secondary" style="margin-top:12px;" onclick="document.getElementById('finFrom').value='';document.getElementById('finTo').value='';loadFinance();">Clear (all time)</button>
+      </div>
+      <div class="stat-grid">
+        <div class="stat-card"><div class="stat-label">GMV (period)</div><div class="stat-value" id="finGMV">$0</div></div>
+        <div class="stat-card"><div class="stat-label">Waffer commission</div><div class="stat-value" id="finCommission">$0</div></div>
+        <div class="stat-card"><div class="stat-label">Owed to merchants (period)</div><div class="stat-value" id="finPayoutOwed">$0</div></div>
+        <div class="stat-card"><div class="stat-label">Outstanding (all time)</div><div class="stat-value" id="finOutstanding">$0</div></div>
+      </div>
+      <div class="panel">
+        <h3 style="margin-bottom:14px;">Top merchants (period)</h3>
+        <table><thead><tr><th>Merchant</th><th>Revenue</th></tr></thead><tbody id="finTopMerchants"></tbody></table>
+      </div>
+      <div class="panel">
+        <h3 style="margin-bottom:14px;">Revenue by category (period)</h3>
+        <table><thead><tr><th>Category</th><th>Revenue</th></tr></thead><tbody id="finCategoryTable"></tbody></table>
+      </div>
+      <div class="panel">
+        <h3 style="margin-bottom:14px;">Merchant payouts</h3>
+        <table><thead><tr><th>Merchant</th><th>Rate</th><th>Revenue</th><th>Commission</th><th>Payout (period)</th><th>Outstanding</th><th></th></tr></thead><tbody id="finMerchantTable"></tbody></table>
+      </div>
     </div>
   </section>
 
@@ -345,6 +395,53 @@
       <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" style="height:41px;" onclick="addFrontDeskAccount()">Add</button></div>
     </div>
     <div class="inline-notice" id="accountsNotice"></div>
+  </div>
+</div>
+
+<!-- Admin: edit a merchant account (username/password) -->
+<div class="modal-overlay" id="editAccountModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('editAccountModal')">&times;</button>
+    <h3>Edit account</h3>
+    <input type="hidden" id="eaMerchantId" />
+    <input type="hidden" id="eaAccountId" />
+    <div class="field"><label>Username</label><input id="eaUsername" /></div>
+    <div class="field"><label>Set new password (leave blank to keep current)</label><input id="eaPassword" placeholder="min. 6 characters" /></div>
+    <div class="inline-notice" id="editAccountNotice"></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" style="flex:1;" onclick="saveAccountEdit()">Save changes</button>
+      <button class="btn btn-secondary" style="flex:1;" onclick="regenerateAccountPassword()">Generate random password</button>
+    </div>
+  </div>
+</div>
+
+<!-- Wallet: write a review -->
+<div class="modal-overlay" id="walletReviewModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('walletReviewModal')">&times;</button>
+    <h3>Rate your experience</h3>
+    <p class="note" id="walletReviewOfferTitle" style="margin-top:0;"></p>
+    <input type="hidden" id="wrOfferId" />
+    <div class="field"><label>Your rating</label>
+      <select id="wrRating"><option value="5">★★★★★ (5)</option><option value="4">★★★★☆ (4)</option><option value="3">★★★☆☆ (3)</option><option value="2">★★☆☆☆ (2)</option><option value="1">★☆☆☆☆ (1)</option></select>
+    </div>
+    <div class="field"><label>Comment (optional)</label><textarea id="wrComment" placeholder="How was it?"></textarea></div>
+    <div class="inline-notice" id="wrNotice"></div>
+    <button class="btn btn-primary btn-block" onclick="submitWalletReview()">Submit review</button>
+  </div>
+</div>
+
+<!-- Admin: log a payout -->
+<div class="modal-overlay" id="logPayoutModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('logPayoutModal')">&times;</button>
+    <h3 id="logPayoutTitle">Log a payout</h3>
+    <input type="hidden" id="lpMerchantId" />
+    <p class="note" style="margin-top:0;" id="lpOutstandingNote"></p>
+    <div class="field"><label>Amount paid (USD)</label><input id="lpAmount" type="number" placeholder="e.g. 150" /></div>
+    <div class="field"><label>Note (optional)</label><input id="lpNote" placeholder="e.g. Bank transfer, Whish reference..." /></div>
+    <div class="inline-notice" id="lpNotice"></div>
+    <button class="btn btn-primary btn-block" onclick="submitPayout()">Log payout</button>
   </div>
 </div>
 
