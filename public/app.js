@@ -267,8 +267,6 @@ function renderMerchantArea() {
     merchantNavBtn.style.display = 'none';
     customerNavBtn.style.display = 'inline-block';
     merchantAuthArea.innerHTML = `<button class="merchant-login-link" onclick="switchView('merchant')">Merchant login</button>`;
-    const activeView = document.querySelector('.view.active');
-    if (activeView && activeView.id === 'view-merchant') switchView('customer');
   }
 }
 
@@ -379,6 +377,7 @@ async function doMerchantLogout() {
   await api('/api/merchant/logout', { method: 'POST' });
   currentMerchant = null;
   renderMerchantArea();
+  switchView('customer');
 }
 
 async function changeMerchantPassword() {
