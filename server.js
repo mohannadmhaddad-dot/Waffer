@@ -73,18 +73,19 @@ function reviewStats(offerId) {
   return { avgRating: Math.round(avg * 10) / 10, reviewCount: list.length };
 }
 
-function emailTemplate(heading, bodyHtml) {
+function emailTemplate(heading, bodyHtml, baseUrl) {
+  const logoImg = baseUrl ? `<img src="${baseUrl}/logo.png" alt="Waffer" width="32" height="32" style="border-radius:8px;vertical-align:middle;margin-right:8px;" />` : '';
   return `
-  <div style="background:#FAFAFA;padding:30px 16px;font-family:Arial,Helvetica,sans-serif;">
-    <div style="max-width:520px;margin:0 auto;background:#FFFFFF;border-radius:12px;overflow:hidden;border:1px solid #E5E7EB;">
-      <div style="background:#00A86B;padding:22px 28px;">
-        <span style="font-size:20px;font-weight:800;color:#FFFFFF;letter-spacing:-0.02em;">Waffer</span>
+  <div style="background:#F7F5FC;padding:30px 16px;font-family:Arial,Helvetica,sans-serif;">
+    <div style="max-width:520px;margin:0 auto;background:#FFFFFF;border-radius:12px;overflow:hidden;border:1px solid #E7E1F2;">
+      <div style="background:linear-gradient(135deg, #3B0F70 0%, #22063E 100%);background-color:#3B0F70;padding:22px 28px;">
+        ${logoImg}<span style="font-size:20px;font-weight:800;color:#FFFFFF;letter-spacing:-0.02em;vertical-align:middle;">Waffer</span>
       </div>
-      <div style="padding:28px;color:#1E293B;font-size:14px;line-height:1.6;">
-        <h2 style="margin:0 0 14px;font-size:18px;color:#1E293B;">${heading}</h2>
+      <div style="padding:28px;color:#1E1033;font-size:14px;line-height:1.6;">
+        <h2 style="margin:0 0 14px;font-size:18px;color:#1E1033;">${heading}</h2>
         ${bodyHtml}
       </div>
-      <div style="padding:18px 28px;background:#FAFAFA;border-top:1px solid #E5E7EB;font-size:11.5px;color:#64748B;">
+      <div style="padding:18px 28px;background:#F7F5FC;border-top:1px solid #E7E1F2;font-size:11.5px;color:#6B6280;">
         Waffer — discount vouchers from local businesses in Lebanon.<br/>
         This is an automated message, please don't reply directly to this email.
       </div>
@@ -218,7 +219,7 @@ app.post('/api/auth/register', (req, res) => {
 
   const verifyLink = `${originOf(req)}/?verifyToken=${verifyToken}`;
   sendEmail(email, 'Verify your Waffer email',
-    emailTemplate('Welcome to Waffer!', `<p>Hi ${name},</p><p>Thanks for signing up. Please confirm your email address to get full access to your account.</p>${emailButton('Verify my email', verifyLink)}<p style="color:#64748B;font-size:12.5px;">If the button doesn't work, copy this link: ${verifyLink}</p>`));
+    emailTemplate('Welcome to Waffer!', `<p>Hi ${name},</p><p>Thanks for signing up. Please confirm your email address to get full access to your account.</p>${emailButton('Verify my email', verifyLink)}<p style="color:#64748B;font-size:12.5px;">If the button doesn't work, copy this link: ${verifyLink}</p>`, originOf(req)));
 
   res.json({ user: publicUser(user), claimedGifts: claimedCount });
 });
@@ -273,7 +274,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     db.save();
     const link = `${originOf(req)}/?resetToken=${token}`;
     await sendEmail(user.email, 'Reset your Waffer password',
-      emailTemplate('Reset your password', `<p>Hi ${user.name},</p><p>We got a request to reset your Waffer password. This link expires in 1 hour.</p>${emailButton('Reset my password', link)}<p style="color:#64748B;font-size:12.5px;">If you didn't request this, you can safely ignore this email.</p>`));
+      emailTemplate('Reset your password', `<p>Hi ${user.name},</p><p>We got a request to reset your Waffer password. This link expires in 1 hour.</p>${emailButton('Reset my password', link)}<p style="color:#64748B;font-size:12.5px;">If you didn't request this, you can safely ignore this email.</p>`, originOf(req)));
   }
   res.json({ ok: true, message: 'If that email is registered, a reset link has been sent.' });
 });
@@ -308,7 +309,7 @@ app.post('/api/auth/resend-verification', requireAuth, async (req, res) => {
   db.save();
   const verifyLink = `${originOf(req)}/?verifyToken=${token}`;
   await sendEmail(req.user.email, 'Verify your Waffer email',
-    emailTemplate('Confirm your email', `<p>Hi ${req.user.name},</p><p>Please confirm your email address to get full access to your Waffer account.</p>${emailButton('Verify my email', verifyLink)}`));
+    emailTemplate('Confirm your email', `<p>Hi ${req.user.name},</p><p>Please confirm your email address to get full access to your Waffer account.</p>${emailButton('Verify my email', verifyLink)}`, originOf(req)));
   res.json({ ok: true, message: 'Verification email sent.' });
 });
 
@@ -335,7 +336,7 @@ app.get('/api/merchant/me', (req, res) => {
   res.json({ merchant: account ? publicMerchantAccount(account, business) : null });
 });
 
-app.post('/api/merchant/change-password', requireMerchant, (req, res) => {
+app.post('/api/merchant/change-password', requireMerchantManager, (req, res) => {
   const { currentPassword, newPassword } = req.body;
   if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Enter your current and new password.' });
   if (!bcrypt.compareSync(currentPassword, req.merchantAccount.passwordHash)) return res.status(400).json({ error: 'Current password is incorrect.' });
@@ -355,12 +356,27 @@ app.get('/api/merchant/voucher-lookup', requireMerchant, (req, res) => {
   if (!offer || offer.merchantId !== req.merchant.id) {
     return res.status(403).json({ error: 'This voucher was not issued for your business.' });
   }
+  const buyer = data.users.find(u => u.id === voucher.buyerId);
+  const owner = data.users.find(u => u.id === voucher.ownerId);
   res.json({
     voucher: {
       code: voucher.code, offerTitle: voucher.offerTitle, price: voucher.price,
-      status: voucher.status, expiryDate: voucher.expiryDate, redeemedAt: voucher.redeemedAt
+      status: voucher.status, expiryDate: voucher.expiryDate, redeemedAt: voucher.redeemedAt,
+      createdAt: voucher.createdAt, terms: offer.terms || null,
+      buyerName: (owner || buyer) ? (owner || buyer).name : 'Unknown'
     }
   });
+});
+
+app.get('/api/merchant/recent-redemptions', requireMerchant, (req, res) => {
+  const myOfferIds = data.offers.filter(o => o.merchantId === req.merchant.id).map(o => o.id);
+  let redemptions = data.vouchers.filter(v => myOfferIds.includes(v.offerId) && v.status === 'redeemed' && v.redeemedAt);
+  if (req.merchantAccount.role === 'frontdesk') {
+    redemptions = redemptions.filter(v => v.redeemedByLocation === req.merchantAccount.location);
+  }
+  redemptions = redemptions.sort((a, b) => b.redeemedAt - a.redeemedAt).slice(0, 10)
+    .map(v => ({ code: v.code, redeemedAt: v.redeemedAt, redeemedByUsername: v.redeemedByUsername || null, redeemedByLocation: v.redeemedByLocation || null }));
+  res.json({ redemptions });
 });
 
 app.get('/api/merchant/dashboard', requireMerchantManager, (req, res) => {
@@ -370,8 +386,8 @@ app.get('/api/merchant/dashboard', requireMerchantManager, (req, res) => {
   const sold = myVouchers.length;
   const redeemed = myVouchers.filter(v => v.status === 'redeemed').length;
   const revenue = money(myVouchers.reduce((a, v) => a + v.price, 0));
-  const rate = commissionRateFor(req.merchant);
-  const commission = money(revenue * rate);
+  const currentRate = commissionRateFor(req.merchant);
+  const commission = money(myVouchers.reduce((a, v) => a + v.price * (typeof v.commissionRate === 'number' ? v.commissionRate : currentRate), 0));
   const payout = money(revenue - commission);
   const offerBreakdown = myOffers.map(o => {
     const ov = myVouchers.filter(v => v.offerId === o.id);
@@ -379,9 +395,14 @@ app.get('/api/merchant/dashboard', requireMerchantManager, (req, res) => {
   });
   const recent = myVouchers.map(v => {
     const buyer = data.users.find(u => u.id === v.buyerId);
-    return { code: v.code, offerTitle: v.offerTitle, buyerName: buyer ? buyer.name : 'Unknown', price: v.price, status: v.status, createdAt: v.createdAt, redeemedAt: v.redeemedAt };
+    return { code: v.code, offerTitle: v.offerTitle, buyerName: buyer ? buyer.name : 'Unknown', price: v.price, status: v.status, createdAt: v.createdAt, redeemedAt: v.redeemedAt, redeemedByLocation: v.redeemedByLocation || null };
   }).sort((a, b) => b.createdAt - a.createdAt).slice(0, 100);
-  res.json({ sold, redeemed, revenue, commission, payout, commissionRate: rate, offers: offerBreakdown, recent });
+  res.json({ sold, redeemed, revenue, commission, payout, commissionRate: currentRate, offers: offerBreakdown, recent });
+});
+
+app.get('/api/merchant/payouts', requireMerchantManager, (req, res) => {
+  const payouts = data.payouts.filter(p => p.merchantId === req.merchant.id).sort((a, b) => b.createdAt - a.createdAt);
+  res.json({ payouts, ...merchantOutstanding(req.merchant.id) });
 });
 
 /* ---------- Categories (public read) ---------- */
@@ -494,6 +515,7 @@ app.post('/api/vouchers/purchase', requireAuth, (req, res) => {
   const offer = data.offers.find(o => o.id === Number(offerId));
   if (!offer || offer.status !== 'Live') return res.status(400).json({ error: 'Offer is not available.' });
   const merchant = data.merchants.find(m => m.id === offer.merchantId) || {};
+  const lockedCommissionRate = commissionRateFor(merchant);
   const discountPct = Math.round((1 - offer.price / offer.original) * 100);
   const vouchers = [];
   for (let i = 0; i < qty; i++) {
@@ -502,7 +524,8 @@ app.post('/api/vouchers/purchase', requireAuth, (req, res) => {
       id: code, code, offerId: offer.id, offerTitle: offer.title, price: offer.price, original: offer.original,
       merchantName: merchant.name, discountPct, expiryDate: offer.expiryDate || null,
       ownerId: req.user.id, buyerId: req.user.id, status: 'active',
-      giftedTo: null, recipientEmail: null, recipientPhone: null, createdAt: Date.now(), redeemedAt: null
+      giftedTo: null, recipientEmail: null, recipientPhone: null, createdAt: Date.now(), redeemedAt: null,
+      commissionRate: lockedCommissionRate
     };
     data.vouchers.push(voucher);
     vouchers.push(voucher);
@@ -524,7 +547,7 @@ app.post('/api/vouchers/purchase', requireAuth, (req, res) => {
       <p style="margin-bottom:8px;">Your voucher code${qty > 1 ? 's' : ''}:</p>
       ${codeList}
       <p style="color:#64748B;font-size:12.5px;">Valid until: ${offer.expiryDate || 'no expiry set'}. Find these anytime in your Waffer wallet.</p>
-    `));
+    `, originOf(req)));
 
   res.json({ vouchers, total: money(offer.price * qty) });
 });
@@ -557,7 +580,8 @@ app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
     giftedTo: recipient ? recipient.name : null,
     recipientEmail: recipient ? null : (email || null),
     recipientPhone: recipient ? null : (phone || null),
-    giftMessage: message || null, createdAt: Date.now(), redeemedAt: null
+    giftMessage: message || null, createdAt: Date.now(), redeemedAt: null,
+    commissionRate: commissionRateFor(merchant)
   };
   data.vouchers.push(voucher);
   offer.sold += 1;
@@ -573,7 +597,7 @@ app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
         ${voucher.giftMessage ? `<div style="background:#FAFAFA;border-radius:8px;padding:12px 16px;margin:14px 0;font-style:italic;color:#1E293B;">"${voucher.giftMessage}"</div>` : ''}
         <div style="background:#FAFAFA;border-radius:8px;padding:10px 14px;margin:14px 0;font-family:'Courier New',monospace;font-weight:700;font-size:15px;text-align:center;letter-spacing:1px;">${code}</div>
         <p style="color:#64748B;font-size:12.5px;">Find it anytime in your Waffer wallet.</p>
-      `));
+      `, originOf(req)));
   } else if (email) {
     sendEmail(email, "You've received a gift on Waffer!",
       emailTemplate('Someone sent you a gift! 🎁', `
@@ -583,10 +607,18 @@ app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
         ${voucher.giftMessage ? `<div style="background:#FAFAFA;border-radius:8px;padding:12px 16px;margin:14px 0;font-style:italic;color:#1E293B;">"${voucher.giftMessage}"</div>` : ''}
         <p>Create a free Waffer account using this email address to claim it:</p>
         ${emailButton('Create my account', `${originOf(req)}/?claimEmail=${encodeURIComponent(email)}`)}
-      `));
+      `, originOf(req)));
   }
 
   res.json({ voucher, claimed: !!recipient, recipientName: recipient ? recipient.name : null });
+});
+
+app.get('/api/users/lookup', requireAuth, (req, res) => {
+  const email = (req.query.email || '').trim().toLowerCase();
+  if (!email) return res.json({ exists: false });
+  const user = data.users.find(u => u.email.toLowerCase() === email);
+  if (user && user.id === req.user.id) return res.json({ exists: false, isSelf: true });
+  res.json({ exists: !!user, name: user ? user.name : null });
 });
 
 app.get('/api/vouchers/mine', requireAuth, (req, res) => {
@@ -615,6 +647,8 @@ app.post('/api/vouchers/redeem', requireMerchant, (req, res) => {
   if (voucher.status === 'pending-claim') return res.status(400).json({ error: 'This voucher has not been claimed by its recipient yet.' });
   voucher.status = 'redeemed';
   voucher.redeemedAt = Date.now();
+  voucher.redeemedByLocation = req.merchantAccount.location || 'Main';
+  voucher.redeemedByUsername = req.merchantAccount.username;
   db.save();
 
   if (voucher.ownerId) {
@@ -627,7 +661,7 @@ app.post('/api/vouchers/redeem', requireMerchant, (req, res) => {
           <p>You just redeemed <strong>${voucher.offerTitle}</strong> from ${voucher.merchantName}. We'd love to hear how it went!</p>
           ${emailButton('Leave a review', originOf(req))}
           <p style="color:#64748B;font-size:12.5px;">You can rate it anytime from "My Vouchers" in your Waffer account.</p>
-        `));
+        `, originOf(req)));
     }
   }
 
@@ -674,10 +708,10 @@ app.get('/api/admin/merchants', requireAdmin, (req, res) => {
 });
 
 app.post('/api/admin/merchants', requireAdmin, (req, res) => {
-  const { name, category, contact, logoUrl } = req.body;
+  const { name, category, contact, logoUrl, email } = req.body;
   if (!name || !category || !contact) return res.status(400).json({ error: 'Name, category and contact are required.' });
   const id = db.nextId('merchant');
-  const merchant = { id, name, category, contact, initials: name.slice(0, 2).toUpperCase(), logoUrl: logoUrl || null };
+  const merchant = { id, name, category, contact, initials: name.slice(0, 2).toUpperCase(), logoUrl: logoUrl || null, email: email || null, commissionRate: null };
   data.merchants.push(merchant);
 
   let username = slugify(name);
@@ -690,6 +724,18 @@ app.post('/api/admin/merchants', requireAdmin, (req, res) => {
 
   db.save();
   res.json({ merchant, managerUsername: username, tempPassword });
+});
+
+app.patch('/api/admin/merchants/:id', requireAdmin, (req, res) => {
+  const merchant = data.merchants.find(m => m.id === Number(req.params.id));
+  if (!merchant) return res.status(404).json({ error: 'Merchant not found.' });
+  const { name, category, contact, email } = req.body;
+  if (name && name.trim()) merchant.name = name.trim();
+  if (category) merchant.category = category;
+  if (contact !== undefined) merchant.contact = contact;
+  if (email !== undefined) merchant.email = email.trim() || null;
+  db.save();
+  res.json({ merchant });
 });
 
 app.get('/api/admin/merchants/:id/accounts', requireAdmin, (req, res) => {
@@ -813,18 +859,18 @@ app.get('/api/admin/offers/:id/detail', requireAdmin, (req, res) => {
   const sold = vouchers.length;
   const redeemed = vouchers.filter(v => v.status === 'redeemed').length;
   const revenue = money(vouchers.reduce((a, v) => a + v.price, 0));
-  const rate = commissionRateFor(merchant);
-  const commission = money(revenue * rate);
+  const currentRate = commissionRateFor(merchant);
+  const commission = money(vouchers.reduce((a, v) => a + v.price * (typeof v.commissionRate === 'number' ? v.commissionRate : currentRate), 0));
   const payout = money(revenue - commission);
   const buyerRows = vouchers.map(v => {
     const buyer = data.users.find(u => u.id === v.buyerId);
     return {
       code: v.code, buyerName: buyer ? buyer.name : 'Unknown', buyerEmail: buyer ? buyer.email : '',
-      status: v.status, createdAt: v.createdAt, redeemedAt: v.redeemedAt,
+      status: v.status, createdAt: v.createdAt, redeemedAt: v.redeemedAt, redeemedByLocation: v.redeemedByLocation || null,
       isGift: !!v.giftedTo || !!v.recipientEmail || !!v.recipientPhone
     };
   }).sort((a, b) => b.createdAt - a.createdAt);
-  res.json({ offer, merchantName: merchant.name, sold, redeemed, revenue, commission, payout, commissionRate: rate, vouchers: buyerRows });
+  res.json({ offer, merchantName: merchant.name, sold, redeemed, revenue, commission, payout, commissionRate: currentRate, vouchers: buyerRows });
 });
 
 app.post('/api/admin/offers', requireAdmin, (req, res) => {
@@ -877,9 +923,10 @@ function merchantOutstanding(merchantId) {
   const myOffers = data.offers.filter(o => o.merchantId === merchantId);
   const myOfferIds = myOffers.map(o => o.id);
   const merchant = data.merchants.find(m => m.id === merchantId);
-  const rate = commissionRateFor(merchant);
-  const lifetimeRevenue = money(data.vouchers.filter(v => myOfferIds.includes(v.offerId)).reduce((a, v) => a + v.price, 0));
-  const lifetimeCommission = money(lifetimeRevenue * rate);
+  const currentRate = commissionRateFor(merchant);
+  const myVouchers = data.vouchers.filter(v => myOfferIds.includes(v.offerId));
+  const lifetimeRevenue = money(myVouchers.reduce((a, v) => a + v.price, 0));
+  const lifetimeCommission = money(myVouchers.reduce((a, v) => a + v.price * (typeof v.commissionRate === 'number' ? v.commissionRate : currentRate), 0));
   const lifetimeNetOwed = money(lifetimeRevenue - lifetimeCommission);
   const totalPaid = money(data.payouts.filter(p => p.merchantId === merchantId).reduce((a, p) => a + p.amount, 0));
   return { lifetimeRevenue, lifetimeCommission, lifetimeNetOwed, totalPaid, outstanding: money(lifetimeNetOwed - totalPaid) };
@@ -892,7 +939,7 @@ app.get('/api/admin/finance/overview', requireAdmin, (req, res) => {
   vouchersInRange.forEach(v => {
     const offer = data.offers.find(o => o.id === v.offerId);
     const merchant = offer ? data.merchants.find(m => m.id === offer.merchantId) : null;
-    const rate = commissionRateFor(merchant);
+    const rate = typeof v.commissionRate === 'number' ? v.commissionRate : commissionRateFor(merchant);
     gmv += v.price;
     commissionTotal += v.price * rate;
   });
@@ -932,13 +979,13 @@ app.get('/api/admin/finance/merchants', requireAdmin, (req, res) => {
   const rows = data.merchants.map(merchant => {
     const myOfferIds = data.offers.filter(o => o.merchantId === merchant.id).map(o => o.id);
     const periodVouchers = data.vouchers.filter(v => myOfferIds.includes(v.offerId) && inRange(v.createdAt, from, to));
-    const rate = commissionRateFor(merchant);
+    const currentRate = commissionRateFor(merchant);
     const periodRevenue = money(periodVouchers.reduce((a, v) => a + v.price, 0));
-    const periodCommission = money(periodRevenue * rate);
+    const periodCommission = money(periodVouchers.reduce((a, v) => a + v.price * (typeof v.commissionRate === 'number' ? v.commissionRate : currentRate), 0));
     const periodPayout = money(periodRevenue - periodCommission);
     const outstanding = merchantOutstanding(merchant.id);
     return {
-      id: merchant.id, name: merchant.name, commissionRate: rate,
+      id: merchant.id, name: merchant.name, commissionRate: currentRate,
       periodRevenue, periodCommission, periodPayout,
       lifetimeOutstanding: outstanding.outstanding, totalPaid: outstanding.totalPaid
     };
@@ -956,14 +1003,33 @@ app.post('/api/admin/merchants/:id/payouts', requireAdmin, (req, res) => {
   const merchantId = Number(req.params.id);
   const merchant = data.merchants.find(m => m.id === merchantId);
   if (!merchant) return res.status(404).json({ error: 'Merchant not found.' });
-  const { amount, note } = req.body;
+  const { amount, note, method } = req.body;
   const amt = Number(amount);
   if (!amt || amt <= 0) return res.status(400).json({ error: 'Enter a valid payout amount.' });
+  const validMethods = ['Bank transfer', 'Whish', 'Cash', 'Other'];
+  const payoutMethod = validMethods.includes(method) ? method : 'Other';
   const id = db.nextId('payout');
-  const payout = { id, merchantId, amount: money(amt), note: (note || '').trim().slice(0, 200), createdAt: Date.now() };
+  const payout = { id, merchantId, amount: money(amt), method: payoutMethod, note: (note || '').trim().slice(0, 200), createdAt: Date.now() };
   data.payouts.push(payout);
   db.save();
-  res.json({ payout, ...merchantOutstanding(merchantId) });
+  const outstandingInfo = merchantOutstanding(merchantId);
+
+  if (merchant.email) {
+    sendEmail(merchant.email, `You've been paid $${payout.amount} — Waffer`,
+      emailTemplate('Payout confirmation', `
+        <p>Hi ${merchant.name},</p>
+        <p>We've recorded a payout to your business:</p>
+        <table style="width:100%;margin:16px 0;border-collapse:collapse;">
+          <tr><td style="padding:6px 0;color:#64748B;">Amount</td><td style="padding:6px 0;text-align:right;font-weight:700;">$${payout.amount}</td></tr>
+          <tr><td style="padding:6px 0;color:#64748B;">Method</td><td style="padding:6px 0;text-align:right;">${payoutMethod}</td></tr>
+          ${payout.note ? `<tr><td style="padding:6px 0;color:#64748B;">Reference</td><td style="padding:6px 0;text-align:right;">${payout.note}</td></tr>` : ''}
+          <tr><td style="padding:8px 0;color:#1E1033;font-weight:700;border-top:1px solid #E7E1F2;">Remaining balance</td><td style="padding:8px 0;text-align:right;font-weight:800;border-top:1px solid #E7E1F2;">$${outstandingInfo.outstanding}</td></tr>
+        </table>
+        <p style="color:#64748B;font-size:12.5px;">You can view your full payout history and download invoices anytime by logging into your Waffer merchant account.</p>
+      `, originOf(req)));
+  }
+
+  res.json({ payout, ...outstandingInfo });
 });
 
 app.get('/api/admin/merchants/:id/invoice', requireAdmin, (req, res) => {
@@ -974,7 +1040,7 @@ app.get('/api/admin/merchants/:id/invoice', requireAdmin, (req, res) => {
   const myOffers = data.offers.filter(o => o.merchantId === merchantId);
   const myOfferIds = myOffers.map(o => o.id);
   const vouchers = data.vouchers.filter(v => myOfferIds.includes(v.offerId) && inRange(v.createdAt, from, to));
-  const rate = commissionRateFor(merchant);
+  const currentRate = commissionRateFor(merchant);
 
   const perOffer = {};
   vouchers.forEach(v => {
@@ -984,7 +1050,7 @@ app.get('/api/admin/merchants/:id/invoice', requireAdmin, (req, res) => {
   });
   const lineItems = Object.values(perOffer);
   const revenue = money(vouchers.reduce((a, v) => a + v.price, 0));
-  const commission = money(revenue * rate);
+  const commission = money(vouchers.reduce((a, v) => a + v.price * (typeof v.commissionRate === 'number' ? v.commissionRate : currentRate), 0));
   const netPayout = money(revenue - commission);
   const outstanding = merchantOutstanding(merchantId);
 
@@ -994,9 +1060,15 @@ app.get('/api/admin/merchants/:id/invoice', requireAdmin, (req, res) => {
   const doc = new PDFDocument({ margin: 50, size: 'A4' });
   doc.pipe(res);
 
-  doc.rect(0, 0, doc.page.width, 90).fill('#00A86B');
-  doc.fillColor('#FFFFFF').fontSize(24).font('Helvetica-Bold').text('Waffer', 50, 30);
-  doc.fontSize(11).font('Helvetica').text('Merchant Payout Invoice', 50, 60);
+  doc.rect(0, 0, doc.page.width, 90).fill('#3B0F70');
+  const logoPath = path.join(__dirname, 'public', 'logo.png');
+  let titleX = 50;
+  if (fs.existsSync(logoPath)) {
+    doc.image(logoPath, 50, 24, { width: 42, height: 42 });
+    titleX = 102;
+  }
+  doc.fillColor('#FFFFFF').fontSize(24).font('Helvetica-Bold').text('Waffer', titleX, 30);
+  doc.fontSize(11).font('Helvetica').text('Merchant Payout Invoice', titleX, 60);
 
   doc.fillColor('#1E293B').fontSize(11).font('Helvetica').moveDown(3);
   doc.font('Helvetica-Bold').text('Billed to:', 50, 115);
@@ -1037,19 +1109,23 @@ app.get('/api/admin/merchants/:id/invoice', requireAdmin, (req, res) => {
   y += 16;
 
   function summaryRow(label, value, bold) {
-    doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(11).fillColor('#1E293B');
-    doc.text(label, 350, y, { width: 100 });
-    doc.text(value, 440, y, { width: 105, align: 'right' });
-    y += 20;
+    doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(10.5).fillColor(bold ? '#3B0F70' : '#1E1033');
+    doc.text(label, 300, y, { width: 150 });
+    doc.text(value, 450, y, { width: 95, align: 'right' });
+    y += 22;
   }
   summaryRow('Total revenue', `$${revenue}`);
-  summaryRow(`Waffer commission (${Math.round(rate * 100)}%)`, `-$${commission}`);
+  summaryRow(`Waffer commission (${Math.round(currentRate * 100)}% current rate)`, `-$${commission}`);
   summaryRow('Net payout (this period)', `$${netPayout}`, true);
   y += 8;
-  doc.moveTo(350, y).lineTo(545, y).strokeColor('#E5E7EB').stroke();
+  doc.moveTo(300, y).lineTo(545, y).strokeColor('#E7E1F2').stroke();
   y += 12;
   summaryRow('Already paid (lifetime)', `$${outstanding.totalPaid}`);
-  summaryRow('Outstanding balance', `$${outstanding.outstanding}`, true);
+  doc.rect(295, y - 4, 250, 26).fill('#F5A623');
+  doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(10.5);
+  doc.text('Outstanding balance', 300, y, { width: 150 });
+  doc.text(`$${outstanding.outstanding}`, 450, y, { width: 95, align: 'right' });
+  y += 22;
 
   doc.fontSize(9).fillColor('#94A3B8').text(
     'This invoice reflects vouchers sold through the Waffer platform. Payment is settled outside the platform. Contact Waffer support with any questions.',
