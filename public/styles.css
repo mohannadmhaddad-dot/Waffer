@@ -22,6 +22,9 @@ header.topbar{background:var(--brand);color:#fff;box-shadow:0 1px 4px rgba(0,0,0
 #authArea{display:flex;align-items:center;gap:10px;font-size:13px;}
 #authArea button{background:var(--accent);color:#fff;padding:8px 16px;border-radius:999px;font-weight:700;font-size:13px;}
 .user-pill-btn{background:rgba(255,255,255,0.15) !important;color:#fff !important;padding:8px 14px !important;border-radius:999px;font-weight:600 !important;font-size:13px;}
+#merchantAuthArea{display:flex;align-items:center;}
+.merchant-login-link{background:transparent !important;color:rgba(255,255,255,0.75) !important;font-size:12.5px !important;font-weight:600 !important;padding:6px 10px !important;border:1px solid rgba(255,255,255,0.35) !important;border-radius:999px;}
+.merchant-badge{background:rgba(255,255,255,0.15);color:#fff;font-size:12px;padding:6px 12px;border-radius:999px;font-weight:600;}
 
 main{padding:28px 0 60px;}
 .view{display:none;}
@@ -177,5 +180,7 @@ td{padding:10px;border-bottom:1px solid var(--border);}
 .expiry-badge.urgent{background:#FEF2F2;color:var(--danger);}
 .mini-photo{width:44px;height:44px;border-radius:6px;object-fit:cover;background:var(--bg);border:1px solid var(--border);}
 .mini-photo-placeholder{width:44px;height:44px;border-radius:6px;background:var(--brand-light);}
+.commission-tag{font-size:12px;font-weight:700;color:var(--brand-dark);cursor:pointer;text-decoration:underline;}
+.admin-tab-panel{margin-top:20px;}
 
 footer{text-align:center;padding:24px;color:var(--muted);font-size:12px;border-top:1px solid var(--border);}
