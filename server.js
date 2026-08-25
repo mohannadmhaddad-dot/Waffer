@@ -42,7 +42,7 @@ app.use(session({
 }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-const data = db.load();
+let data;
 
 /* ---------- Helpers ---------- */
 function genVoucherCode() {
@@ -180,7 +180,7 @@ function originOf(req) {
 
 /* ---------- Customer auth ---------- */
 app.post('/api/auth/register', (req, res) => {
-  const { name, email, phone, countryCode, password } = req.body;
+  const { name, email, phone, countryCode, password, gender, birthday } = req.body;
   const fullPhone = phone ? `${countryCode || ''}${phone}`.trim() : '';
   if (!name || !email || !password || !phone) {
     return res.status(400).json({ error: 'Name, email, phone and password are required.' });
@@ -193,7 +193,7 @@ app.post('/api/auth/register', (req, res) => {
   const verifyToken = crypto.randomBytes(24).toString('hex');
   const user = {
     id, name, email, phone: fullPhone, passwordHash, isAdmin: false, createdAt: Date.now(),
-    gender: null, birthday: null, resetToken: null, resetTokenExpiry: null,
+    gender: gender || null, birthday: birthday || null, resetToken: null, resetTokenExpiry: null,
     emailVerified: false, verifyToken
   };
   data.users.push(user);
@@ -582,7 +582,7 @@ app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
         <p style="color:#64748B;margin-top:0;">from ${voucher.merchantName}</p>
         ${voucher.giftMessage ? `<div style="background:#FAFAFA;border-radius:8px;padding:12px 16px;margin:14px 0;font-style:italic;color:#1E293B;">"${voucher.giftMessage}"</div>` : ''}
         <p>Create a free Waffer account using this email address to claim it:</p>
-        ${emailButton('Create my account', originOf(req))}
+        ${emailButton('Create my account', `${originOf(req)}/?claimEmail=${encodeURIComponent(email)}`)}
       `));
   }
 
@@ -616,6 +616,21 @@ app.post('/api/vouchers/redeem', requireMerchant, (req, res) => {
   voucher.status = 'redeemed';
   voucher.redeemedAt = Date.now();
   db.save();
+
+  if (voucher.ownerId) {
+    const owner = data.users.find(u => u.id === voucher.ownerId);
+    const alreadyReviewed = owner && data.reviews.some(r => r.offerId === voucher.offerId && r.userId === owner.id);
+    if (owner && owner.email && !alreadyReviewed) {
+      sendEmail(owner.email, `How was ${voucher.offerTitle}?`,
+        emailTemplate('Tell us how it went', `
+          <p>Hi ${owner.name},</p>
+          <p>You just redeemed <strong>${voucher.offerTitle}</strong> from ${voucher.merchantName}. We'd love to hear how it went!</p>
+          ${emailButton('Leave a review', originOf(req))}
+          <p style="color:#64748B;font-size:12.5px;">You can rate it anytime from "My Vouchers" in your Waffer account.</p>
+        `));
+    }
+  }
+
   res.json({ ok: true, voucher });
 });
 
@@ -1044,6 +1059,23 @@ app.get('/api/admin/merchants/:id/invoice', requireAdmin, (req, res) => {
   doc.end();
 });
 
-app.listen(PORT, () => {
-  console.log(`Waffer server running on http://localhost:${PORT}`);
-});
+async function start() {
+  data = await db.load();
+  app.listen(PORT, () => {
+    console.log(`Waffer server running on http://localhost:${PORT}`);
+  });
+}
+start();
+
+async function gracefulShutdown(signal) {
+  console.log(`${signal} received, flushing pending database writes before shutdown...`);
+  try {
+    await db.flush();
+    console.log('All writes flushed. Exiting.');
+  } catch (e) {
+    console.log('Flush error during shutdown:', e.message);
+  }
+  process.exit(0);
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
