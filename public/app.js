@@ -220,6 +220,20 @@ async function saveProfile() {
   }
 }
 
+async function changeMyPassword() {
+  clearNotice('passwordNotice');
+  const currentPassword = document.getElementById('profCurrentPassword').value;
+  const newPassword = document.getElementById('profNewPassword').value;
+  try {
+    await api('/api/auth/change-password', { method: 'POST', body: { currentPassword, newPassword } });
+    document.getElementById('profCurrentPassword').value = '';
+    document.getElementById('profNewPassword').value = '';
+    showNotice('passwordNotice', 'Password updated.', 'success');
+  } catch (e) {
+    showNotice('passwordNotice', e.message, 'error');
+  }
+}
+
 /* ---------- Merchant auth ---------- */
 async function refreshMerchantAuth() {
   const { merchant } = await api('/api/merchant/me');
@@ -233,12 +247,86 @@ function renderMerchantArea() {
   if (currentMerchant) {
     loggedOut.style.display = 'none';
     loggedIn.style.display = 'block';
-    document.getElementById('merchantDashTitle').textContent = currentMerchant.name + ' — Dashboard';
-    loadMerchantDashboard();
+    if (currentMerchant.role === 'manager') {
+      renderManagerDashboard();
+    } else {
+      renderFrontDeskView();
+    }
   } else {
     loggedOut.style.display = 'block';
     loggedIn.style.display = 'none';
   }
+}
+
+function renderFrontDeskView() {
+  const el = document.getElementById('merchantLoggedInContent');
+  el.innerHTML = `
+    <h2>${currentMerchant.merchantName}</h2>
+    <p class="note" style="margin-bottom:20px;">Front desk account — ${currentMerchant.location || 'this branch'}. You can look up and redeem vouchers. Sales figures aren't shown here.</p>
+    <div class="panel">
+      <h3 style="margin-bottom:14px;">Look up a voucher</h3>
+      <div class="two-col">
+        <div class="field" style="margin-bottom:0;"><label>Voucher code</label><input id="lookupInput" placeholder="e.g. WQ-8F2K91" /></div>
+        <div style="display:flex;align-items:flex-end;"><button class="btn btn-secondary" style="height:41px;" onclick="lookupVoucher()">Check</button></div>
+      </div>
+      <div id="lookupResult"></div>
+    </div>
+    <div class="panel">
+      <h3 style="margin-bottom:14px;">Redeem a voucher</h3>
+      <div class="two-col">
+        <div class="field" style="margin-bottom:0;"><label>Voucher code</label><input id="redeemInput" placeholder="e.g. WQ-8F2K91" /></div>
+        <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" style="height:41px;" onclick="redeemVoucher()">Verify &amp; redeem</button></div>
+      </div>
+      <div class="inline-notice" id="redeemNotice"></div>
+    </div>
+  `;
+}
+
+async function lookupVoucher() {
+  const code = document.getElementById('lookupInput').value.trim();
+  const resultEl = document.getElementById('lookupResult');
+  if (!code) return;
+  try {
+    const { voucher } = await api('/api/merchant/voucher-lookup?code=' + encodeURIComponent(code));
+    resultEl.innerHTML = `
+      <div class="inline-notice show-success">
+        <strong>${voucher.offerTitle}</strong> &middot; $${voucher.price}<br/>
+        Status: <span class="status-pill status-${voucher.status}">${voucher.status}</span> &middot; Valid until: ${voucher.expiryDate || 'no expiry set'}
+      </div>`;
+  } catch (e) {
+    resultEl.innerHTML = `<div class="inline-notice show-error">${e.message}</div>`;
+  }
+}
+
+function renderManagerDashboard() {
+  const el = document.getElementById('merchantLoggedInContent');
+  el.innerHTML = `
+    <h2>${currentMerchant.merchantName} — Dashboard</h2>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-label">Vouchers sold</div><div class="stat-value" id="mdSold">0</div></div>
+      <div class="stat-card"><div class="stat-label">Redeemed</div><div class="stat-value" id="mdRedeemed">0</div></div>
+      <div class="stat-card"><div class="stat-label">Sales volume</div><div class="stat-value" id="mdRevenue">$0</div></div>
+      <div class="stat-card"><div class="stat-label">Your payout</div><div class="stat-value" id="mdPayout">$0</div></div>
+    </div>
+    <p class="note" id="mdCommissionNote" style="margin-bottom:20px;"></p>
+    <div class="panel">
+      <h3 style="margin-bottom:14px;">Your offers</h3>
+      <table><thead><tr><th>Offer</th><th>Status</th><th>Sold</th><th>Redeemed</th><th>Revenue</th></tr></thead><tbody id="mdOffersTable"></tbody></table>
+    </div>
+    <div class="panel">
+      <h3 style="margin-bottom:14px;">Recent sales</h3>
+      <table><thead><tr><th>Voucher</th><th>Buyer</th><th>Price</th><th>Status</th><th>Date</th></tr></thead><tbody id="mdRecentTable"></tbody></table>
+    </div>
+    <div class="panel">
+      <h3 style="margin-bottom:14px;">Redeem a voucher</h3>
+      <div class="two-col">
+        <div class="field" style="margin-bottom:0;"><label>Voucher code</label><input id="redeemInput" placeholder="e.g. WQ-8F2K91" /></div>
+        <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" style="height:41px;" onclick="redeemVoucher()">Verify &amp; redeem</button></div>
+      </div>
+      <div class="inline-notice" id="redeemNotice"></div>
+    </div>
+  `;
+  loadMerchantDashboard();
 }
 
 async function loadMerchantDashboard() {
@@ -250,8 +338,8 @@ async function loadMerchantDashboard() {
     document.getElementById('mdPayout').textContent = '$' + d.payout;
     document.getElementById('mdCommissionNote').textContent = `Waffer commission (${Math.round(d.commissionRate * 100)}%): $${d.commission} deducted from sales volume.`;
     document.getElementById('mdOffersTable').innerHTML = d.offers.map(o =>
-      `<tr><td>${o.title}</td><td>${o.sold}</td><td>${o.redeemed}</td><td>$${o.revenue}</td></tr>`
-    ).join('') || `<tr><td colspan="4" class="empty">No offers yet.</td></tr>`;
+      `<tr><td>${o.title}</td><td>${o.status}</td><td>${o.sold}</td><td>${o.redeemed}</td><td>$${o.revenue}</td></tr>`
+    ).join('') || `<tr><td colspan="5" class="empty">No offers yet.</td></tr>`;
     document.getElementById('mdRecentTable').innerHTML = d.recent.map(v =>
       `<tr><td class="voucher-code">${v.code}</td><td>${v.buyerName}</td><td>$${v.price}</td><td><span class="status-pill status-${v.status}">${v.status}</span></td><td>${fmtDate(v.createdAt)}</td></tr>`
     ).join('') || `<tr><td colspan="5" class="empty">No sales yet.</td></tr>`;
@@ -277,6 +365,20 @@ async function doMerchantLogout() {
   await api('/api/merchant/logout', { method: 'POST' });
   currentMerchant = null;
   renderMerchantArea();
+}
+
+async function changeMerchantPassword() {
+  clearNotice('merPasswordNotice');
+  const currentPassword = document.getElementById('merCurrentPassword').value;
+  const newPassword = document.getElementById('merNewPassword').value;
+  try {
+    await api('/api/merchant/change-password', { method: 'POST', body: { currentPassword, newPassword } });
+    document.getElementById('merCurrentPassword').value = '';
+    document.getElementById('merNewPassword').value = '';
+    showNotice('merPasswordNotice', 'Password updated.', 'success');
+  } catch (e) {
+    showNotice('merPasswordNotice', e.message, 'error');
+  }
 }
 
 /* ---------- Nav ---------- */
@@ -345,10 +447,23 @@ function renderChips() {
 function setCategory(c) { activeCategory = c; renderChips(); renderOffers(); }
 
 function thumbContent(o) {
+  if (o.imageUrl) {
+    return `<img class="offer-photo" src="${o.imageUrl}" alt="${o.title}" />`;
+  }
   if (o.merchantLogoUrl) {
     return `<img class="merchant-logo" src="${o.merchantLogoUrl}" alt="${o.merchantName} logo" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" /><span class="thumb-badge" style="display:none;">${o.merchantInitials || '??'}</span>`;
   }
   return `${catIcons[o.category] || defaultCatIcon}<span class="thumb-badge">${o.merchantInitials || '??'}</span>`;
+}
+
+function starString(rating) {
+  const full = Math.round(rating);
+  return '★'.repeat(full) + '☆'.repeat(5 - full);
+}
+
+function ratingRow(o) {
+  if (!o.reviewCount) return `<span class="rating-row">No reviews yet</span>`;
+  return `<span class="rating-row"><span class="stars">${starString(o.avgRating)}</span> ${o.avgRating} (${o.reviewCount})</span>`;
 }
 
 async function renderOffers() {
@@ -356,6 +471,12 @@ async function renderOffers() {
   const params = new URLSearchParams();
   if (activeCategory !== 'All') params.set('category', activeCategory);
   if (search) params.set('search', search);
+  const minPrice = document.getElementById('minPrice').value;
+  const maxPrice = document.getElementById('maxPrice').value;
+  const sort = document.getElementById('sortSelect').value;
+  if (minPrice) params.set('minPrice', minPrice);
+  if (maxPrice) params.set('maxPrice', maxPrice);
+  if (sort) params.set('sort', sort);
   const { offers } = await api('/api/offers?' + params.toString());
   const grid = document.getElementById('offerGrid');
   if (offers.length === 0) { grid.innerHTML = `<div class="empty">No offers match your search.</div>`; return; }
@@ -369,6 +490,7 @@ async function renderOffers() {
         <div class="offer-cat">${o.category}</div>
         <div class="offer-title">${o.title}</div>
         <div class="offer-merchant">${o.merchantName}</div>
+        ${ratingRow(o)}
         <div class="offer-price-row">
           <span class="price-now">$${o.price}</span>
           <span class="price-was">$${o.original}</span>
@@ -385,9 +507,11 @@ function openOffer(id) {
   purchaseQty = 1;
   const pct = Math.round((1 - currentOffer.price / currentOffer.original) * 100);
   document.getElementById('offerModalBody').innerHTML = `
+    ${currentOffer.imageUrl ? `<img class="offer-hero-img" src="${currentOffer.imageUrl}" alt="${currentOffer.title}" />` : ''}
     <div class="offer-cat">${currentOffer.category}</div>
     <h3>${currentOffer.title}</h3>
     <div class="offer-merchant">${currentOffer.merchantName}</div>
+    ${ratingRow(currentOffer)}
     <div class="offer-price-row" style="margin:14px 0;">
       <span class="price-now" style="font-size:24px;">$${currentOffer.price}</span>
       <span class="price-was">$${currentOffer.original}</span>
@@ -407,8 +531,53 @@ function openOffer(id) {
       <button class="btn btn-primary" style="flex:1;" onclick="startPurchase()">Buy for myself</button>
       <button class="btn btn-secondary" style="flex:1;" onclick="startGift()">Send as gift</button>
     </div>
+    <hr class="modal-divider" />
+    <h3 style="font-size:15px;">Reviews</h3>
+    <div id="reviewsList">Loading...</div>
+    ${currentUser ? `
+      <div style="margin-top:14px;">
+        <div class="field"><label>Your rating</label>
+          <select id="reviewRating"><option value="5">★★★★★ (5)</option><option value="4">★★★★☆ (4)</option><option value="3">★★★☆☆ (3)</option><option value="2">★★☆☆☆ (2)</option><option value="1">★☆☆☆☆ (1)</option></select>
+        </div>
+        <div class="field"><label>Comment (optional)</label><textarea id="reviewComment" placeholder="How was it?"></textarea></div>
+        <div class="inline-notice" id="reviewNotice"></div>
+        <button class="btn btn-secondary" onclick="submitReview(${id})">Submit review</button>
+        <p class="note">You can only review offers you've actually redeemed.</p>
+      </div>
+    ` : ''}
   `;
   openModal('offerModal');
+  loadReviews(id);
+}
+
+async function loadReviews(offerId) {
+  try {
+    const { reviews } = await api(`/api/offers/${offerId}/reviews`);
+    const el = document.getElementById('reviewsList');
+    if (!el) return;
+    el.innerHTML = reviews.length === 0 ? `<div class="empty">No reviews yet.</div>` : reviews.map(r => `
+      <div class="review-item">
+        <span class="review-stars">${starString(r.rating)}</span>
+        ${r.comment ? `<div>${r.comment}</div>` : ''}
+        <div class="review-meta">${r.userName} &middot; ${fmtDate(r.createdAt)}</div>
+      </div>
+    `).join('');
+  } catch (e) { /* ignore */ }
+}
+
+async function submitReview(offerId) {
+  clearNotice('reviewNotice');
+  const rating = document.getElementById('reviewRating').value;
+  const comment = document.getElementById('reviewComment').value.trim();
+  try {
+    await api(`/api/offers/${offerId}/reviews`, { method: 'POST', body: { rating, comment } });
+    toast('Review posted. Thanks!', 'success');
+    document.getElementById('reviewComment').value = '';
+    loadReviews(offerId);
+    renderOffers();
+  } catch (e) {
+    showNotice('reviewNotice', e.message, 'error');
+  }
 }
 
 function changeQty(delta) {
@@ -472,6 +641,20 @@ async function completeGift() {
   }
 }
 
+function daysUntil(dateStr) {
+  if (!dateStr) return null;
+  const diff = new Date(dateStr) - new Date();
+  return Math.ceil(diff / (1000 * 60 * 60 * 24));
+}
+
+function expiryBadge(v) {
+  if (v.status !== 'active' || !v.expiryDate) return '';
+  const days = daysUntil(v.expiryDate);
+  if (days == null || days > 14) return '';
+  if (days < 0) return `<span class="expiry-badge urgent">Expired</span>`;
+  return `<span class="expiry-badge ${days <= 3 ? 'urgent' : ''}">Expires in ${days} day${days === 1 ? '' : 's'}</span>`;
+}
+
 /* ---------- Wallet ---------- */
 async function renderWallet() {
   const { vouchers } = await api('/api/vouchers/mine');
@@ -483,7 +666,7 @@ async function renderWallet() {
         <div class="voucher-left">
           <h4>${v.offerTitle}${v.giftedTo ? ' <span style="font-weight:400;color:var(--muted);font-size:12px;">(gift)</span>' : ''}</h4>
           <div class="voucher-meta">${v.merchantName} &middot; ${v.discountPct != null ? v.discountPct + '% off' : ''} &middot; $${v.price}${v.expiryDate ? ' &middot; valid until ' + v.expiryDate : ''}</div>
-          <div class="voucher-code-row">Code: <span class="voucher-code">${v.code}</span></div>
+          <div class="voucher-code-row">Code: <span class="voucher-code">${v.code}</span> ${expiryBadge(v)}</div>
         </div>
         <div style="display:flex;align-items:center;gap:10px;">
           <span class="status-pill status-${v.status}">${v.status}</span>
@@ -524,7 +707,7 @@ async function redeemVoucher() {
     const { voucher } = await api('/api/vouchers/redeem', { method: 'POST', body: { code: input.value } });
     showNotice('redeemNotice', `Voucher ${voucher.code} redeemed successfully for "${voucher.offerTitle}".`, 'success');
     input.value = '';
-    loadMerchantDashboard();
+    if (currentMerchant && currentMerchant.role === 'manager') loadMerchantDashboard();
   } catch (e) {
     showNotice('redeemNotice', e.message, 'error');
   }
@@ -585,25 +768,53 @@ async function renderAdmin() {
       <td>${m.logoUrl ? `<img class="mini-logo" src="${m.logoUrl}" alt="" />` : `<div class="mini-logo-placeholder">${m.initials || '??'}</div>`}</td>
       <td>${m.name}</td>
       <td>${m.category}</td>
-      <td>${m.username || '—'}</td>
       <td>
         <input type="file" accept="image/*" style="display:none" id="logoFile-${m.id}" onchange="uploadLogo(${m.id}, this)" />
         <button class="row-btn" onclick="document.getElementById('logoFile-${m.id}').click()">Upload logo</button>
       </td>
+      <td><button class="row-btn" onclick="openAccountsModal(${m.id}, '${m.name.replace(/'/g, "\\'")}')">Manage accounts</button></td>
     </tr>
   `).join('') || `<tr><td colspan="5" class="empty">No merchants yet.</td></tr>`;
 
   window.__adminOffersCache = (await api('/api/admin/offers')).offers;
   document.getElementById('adminOfferTable').innerHTML = window.__adminOffersCache.map(o => `
     <tr>
+      <td>
+        ${o.imageUrl ? `<img class="mini-photo" src="${o.imageUrl}" alt="" />` : `<div class="mini-photo-placeholder"></div>`}
+        <input type="file" accept="image/*" style="display:none" id="offerImg-${o.id}" onchange="uploadOfferImage(${o.id}, this)" />
+        <button class="row-btn" style="margin-top:4px;" onclick="document.getElementById('offerImg-${o.id}').click()">Upload</button>
+      </td>
       <td><a href="#" class="offer-link" onclick="openOfferDetail(${o.id});return false;">${o.title}</a></td>
-      <td>${o.merchantName}</td><td>$${o.price}</td><td>${o.sold}</td><td>${o.status}</td>
+      <td>${o.merchantName}</td><td>$${o.price}</td>
+      <td>${o.reviewCount ? starString(o.avgRating) + ' (' + o.reviewCount + ')' : '—'}</td>
+      <td>${o.sold}</td><td>${o.status}</td>
       <td>
         <button class="row-btn" onclick="openEditOffer(${o.id})">Edit</button>
         <button class="row-btn" onclick="toggleOfferStatus(${o.id})">${o.status === 'Live' ? 'Pause' : 'Resume'}</button>
       </td>
     </tr>
-  `).join('') || `<tr><td colspan="6" class="empty">No offers yet.</td></tr>`;
+  `).join('') || `<tr><td colspan="8" class="empty">No offers yet.</td></tr>`;
+}
+
+async function uploadOfferImage(offerId, input) {
+  const file = input.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('image', file);
+  try {
+    const res = await fetch(`/api/admin/offers/${offerId}/image-upload`, {
+      method: 'POST',
+      credentials: 'include',
+      body: formData
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || 'Upload failed.');
+    renderAdmin();
+    renderOffers();
+    toast('Photo uploaded.', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
 }
 
 async function toggleOfferStatus(id) {
@@ -696,16 +907,65 @@ async function createMerchant() {
   const contact = document.getElementById('nmContact').value.trim();
   const logoUrl = document.getElementById('nmLogoUrl').value.trim();
   try {
-    const { merchant, tempPassword } = await api('/api/admin/merchants', { method: 'POST', body: { name, category, contact, logoUrl } });
+    const { merchant, managerUsername, tempPassword } = await api('/api/admin/merchants', { method: 'POST', body: { name, category, contact, logoUrl } });
     document.getElementById('nmName').value = '';
     document.getElementById('nmContact').value = '';
     document.getElementById('nmLogoUrl').value = '';
     closeModal('newMerchantModal');
     renderAdmin();
-    document.getElementById('credentialsBox').innerHTML = `Business: <strong>${merchant.name}</strong><br/>Username: <strong>${merchant.username}</strong><br/>Password: <strong>${tempPassword}</strong>`;
+    document.getElementById('credentialsBox').innerHTML = `Business: <strong>${merchant.name}</strong><br/>Role: <strong>Manager</strong><br/>Username: <strong>${managerUsername}</strong><br/>Password: <strong>${tempPassword}</strong>`;
     openModal('credentialsModal');
   } catch (e) {
     showNotice('merchantNotice', e.message, 'error');
+  }
+}
+
+/* ---------- Merchant staff accounts (admin) ---------- */
+let currentAccountsMerchantId = null;
+
+async function openAccountsModal(merchantId, merchantName) {
+  currentAccountsMerchantId = merchantId;
+  document.getElementById('accountsModalTitle').textContent = merchantName + ' — Staff accounts';
+  document.getElementById('newLocationName').value = '';
+  clearNotice('accountsNotice');
+  await renderAccountsList();
+  openModal('accountsModal');
+}
+
+async function renderAccountsList() {
+  const { accounts } = await api(`/api/admin/merchants/${currentAccountsMerchantId}/accounts`);
+  document.getElementById('accountsList').innerHTML = accounts.map(a => `
+    <div class="account-row">
+      <span>${a.username}${a.location ? ' — ' + a.location : ''}<span class="account-role-badge ${a.role}">${a.role === 'manager' ? 'Manager' : 'Front desk'}</span></span>
+      ${a.role === 'frontdesk' ? `<button class="row-btn danger" onclick="deleteFrontDeskAccount(${a.id})">Remove</button>` : ''}
+    </div>
+  `).join('') || `<div class="empty">No accounts yet.</div>`;
+}
+
+async function addFrontDeskAccount() {
+  clearNotice('accountsNotice');
+  const location = document.getElementById('newLocationName').value.trim();
+  if (!location) { showNotice('accountsNotice', 'Enter a branch/location name.', 'error'); return; }
+  try {
+    const { account, tempPassword } = await api(`/api/admin/merchants/${currentAccountsMerchantId}/accounts`, { method: 'POST', body: { location } });
+    document.getElementById('newLocationName').value = '';
+    await renderAccountsList();
+    document.getElementById('credentialsBox').innerHTML = `Location: <strong>${account.location}</strong><br/>Role: <strong>Front desk</strong><br/>Username: <strong>${account.username}</strong><br/>Password: <strong>${tempPassword}</strong>`;
+    closeModal('accountsModal');
+    openModal('credentialsModal');
+  } catch (e) {
+    showNotice('accountsNotice', e.message, 'error');
+  }
+}
+
+async function deleteFrontDeskAccount(accountId) {
+  if (!confirm('Remove this front desk account? They will no longer be able to log in.')) return;
+  try {
+    await api(`/api/admin/merchants/${currentAccountsMerchantId}/accounts/${accountId}`, { method: 'DELETE' });
+    renderAccountsList();
+    toast('Account removed.', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
   }
 }
 
