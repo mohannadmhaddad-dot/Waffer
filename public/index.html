@@ -38,17 +38,27 @@
   </div>
 </header>
 
-<main class="container">
+<nav class="tk-tabbar" id="tkTabbar">
+  <button class="tk-tabbar-item active" data-tab="customer" onclick="tabBarGo('customer')"><span class="ico">◧</span>Browse</button>
+  <button class="tk-tabbar-item" data-tab="ask" onclick="tabBarGo('ask')"><span class="ico">✳</span>Ask</button>
+  <button class="tk-tabbar-item" data-tab="wallet" onclick="tabBarGo('wallet')"><span class="ico">▤</span>Wallet</button>
+  <button class="tk-tabbar-item" data-tab="you" onclick="tabBarGo('you')"><span class="ico">◉</span>You</button>
+</nav>
+
+<main class="container customer-flow">
 
   <section class="view active" id="view-customer">
     <div class="hero">
-      <h1>Save on nights out and dining</h1>
+      <div class="eyebrow">Lebanon · this week</div>
+      <h1>Tear off a<br>better price.</h1>
       <p>Discounted vouchers for entertainment, dining, spa and medical checkups across Lebanon. Buy for yourself, or send one as a gift.</p>
       <div class="search-row">
         <input id="searchInput" placeholder="Search offers, e.g. cinema, sushi..." />
         <button onclick="renderOffers()">Search</button>
       </div>
     </div>
+
+    <div id="dealOfDaySlot"></div>
 
     <div class="ai-box">
       <div class="ai-box-label">Not sure what you're looking for? Describe it and we'll find the best match.</div>
@@ -76,9 +86,10 @@
   </section>
 
   <section class="view" id="view-wallet">
-    <h2>My vouchers</h2>
+    <div class="tk-wallet-title">My wallet</div>
+    <div class="tk-filter-pills" id="walletFilterPills"></div>
     <div id="walletList"></div>
-    <h2 style="margin-top:32px;">Gifts you've sent</h2>
+    <h2 style="margin-top:32px;font-family:var(--font-display);color:var(--ink);">Gifts you've sent</h2>
     <div id="sentList"></div>
   </section>
 
@@ -91,12 +102,12 @@
         <div class="field"><label>Password</label><input id="merPassword" type="password" placeholder="••••••••" /></div>
         <div class="inline-notice" id="merLoginNotice"></div>
         <button class="btn btn-primary btn-block" onclick="doMerchantLogin()">Log in</button>
-        <p class="note">Demo: any username from the merchant list (e.g. grandcinemas, emsherif) / password merchant123</p>
+        <p class="note">Demo: any username from the merchant list (e.g. grandcinemas, emsherif, kimantraspas) / password merchant123</p>
       </div>
     </div>
     <div id="merchantLoggedIn" style="display:none;">
       <div id="merchantLoggedInContent"></div>
-      <div class="panel">
+      <div class="panel" id="merchantPasswordPanel">
         <h3 style="margin-bottom:14px;">Change password</h3>
         <div class="two-col">
           <div class="field"><label>Current password</label><input id="merCurrentPassword" type="password" /></div>
@@ -143,7 +154,7 @@
     <div id="admin-tab-merchants" class="admin-tab-panel" style="display:none;">
       <div class="panel">
         <div class="panel-head"><h3 style="margin:0;">Merchants</h3><button class="btn btn-primary" onclick="openModal('newMerchantModal')">+ Add merchant</button></div>
-        <table><thead><tr><th>Logo</th><th>Business</th><th>Category</th><th>Commission</th><th></th><th></th></tr></thead><tbody id="adminMerchantTable"></tbody></table>
+        <table><thead><tr><th>Logo</th><th>Business</th><th>Category</th><th>Commission</th><th></th><th></th><th></th></tr></thead><tbody id="adminMerchantTable"></tbody></table>
       </div>
     </div>
 
@@ -280,56 +291,82 @@
 </div>
 
 <!-- Offer detail modal -->
-<div class="modal-overlay" id="offerModal"><div class="modal"><button class="modal-close" onclick="closeModal('offerModal')">&times;</button><div id="offerModalBody"></div></div></div>
+<div class="tk-modal-overlay" id="offerModal"><div class="tk-modal"><button class="tk-modal-close" onclick="closeModal('offerModal')">&times;</button><div id="offerModalBody"></div></div></div>
 
 <!-- Purchase modal -->
-<div class="modal-overlay" id="purchaseModal">
-  <div class="modal">
-    <button class="modal-close" onclick="closeModal('purchaseModal')">&times;</button>
-    <h3>Checkout</h3>
-    <div id="purchaseSummary" style="margin-bottom:14px;font-size:14px;color:var(--muted);"></div>
-    <div class="field"><label>Card number</label><input placeholder="4242 4242 4242 4242" /></div>
-    <div class="two-col"><div class="field"><label>Expiry</label><input placeholder="MM/YY" /></div><div class="field"><label>CVC</label><input placeholder="123" /></div></div>
-    <button class="btn btn-primary btn-block" onclick="completePurchase()">Confirm payment</button>
-    <p class="note">Payment is simulated in this build — swap in Whish's integration here.</p>
+<div class="tk-modal-overlay" id="purchaseModal">
+  <div class="tk-checkout-modal" style="margin:auto;">
+    <div class="tk-checkout-head"><strong>Checkout</strong><button onclick="closeModal('purchaseModal')" style="background:none;border:none;color:var(--ink-faint);font-size:18px;cursor:pointer;">✕</button></div>
+    <div class="tk-checkout-body">
+      <div class="tk-seg">
+        <div class="tk-seg-item active">For me</div>
+        <div class="tk-seg-item" onclick="closeModal('purchaseModal');startGift()">As a gift</div>
+      </div>
+      <div id="purchaseSummary"></div>
+      <div class="tk-pay-label">Pay with</div>
+      <div class="tk-pay-option selected"><span style="width:36px;height:24px;border-radius:6px;background:var(--ink);color:var(--gold);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;">whish</span>Whish (simulated for this build)<span style="margin-left:auto;width:18px;height:18px;border-radius:50%;background:var(--ink);color:var(--gold);display:flex;align-items:center;justify-content:center;font-size:10px;">✓</span></div>
+      <div class="tk-total-line">Total<span class="fig" id="purchaseTotalFig"></span></div>
+      <button class="tk-pill" onclick="completePurchase()" id="purchasePayBtn">Pay</button>
+      <div class="tk-fine">Paying accepts the offer terms.</div>
+    </div>
   </div>
 </div>
 
 <!-- Gift modal -->
-<div class="modal-overlay" id="giftModal">
-  <div class="modal">
-    <button class="modal-close" onclick="closeModal('giftModal')">&times;</button>
-    <h3>Send as a gift</h3>
-    <div id="giftSummary" style="margin-bottom:14px;font-size:14px;color:var(--muted);"></div>
-    <div class="field"><label>Recipient's email</label><input id="giftEmail" placeholder="friend@example.com" /></div>
-    <div class="field"><label>Recipient's phone</label><input id="giftPhone" placeholder="+961 71 234 567" /></div>
-    <div class="field"><label>Message (optional)</label><textarea id="giftMessage" placeholder="Happy birthday!"></textarea></div>
-    <div class="inline-notice" id="giftNotice"></div>
-    <button class="btn btn-primary btn-block" onclick="completeGift()">Send gift</button>
-    <p class="note">Fill in at least one. If they don't have a Waffer account yet, we'll email them to sign up and claim it.</p>
+<div class="tk-modal-overlay" id="giftModal">
+  <div class="tk-checkout-modal" style="margin:auto;">
+    <div class="tk-checkout-head"><strong>Send as a gift</strong><button onclick="closeModal('giftModal')" style="background:none;border:none;color:var(--ink-faint);font-size:18px;cursor:pointer;">✕</button></div>
+    <div class="tk-checkout-body">
+      <div class="tk-seg">
+        <div class="tk-seg-item" onclick="closeModal('giftModal');startPurchase()">For me</div>
+        <div class="tk-seg-item active">As a gift</div>
+      </div>
+      <div id="giftSummary" style="margin-bottom:16px;"></div>
+      <div class="tk-field-label">Who's it for</div>
+      <input class="tk-recipient-input" id="giftEmail" placeholder="friend@example.com" oninput="checkGiftRecipient()" />
+      <div id="giftLookupNote" style="margin-top:7px;font-size:12.5px;"></div>
+      <div class="tk-field-label" style="margin-top:14px;">Or their phone</div>
+      <input class="tk-recipient-input" id="giftPhone" placeholder="+961 71 234 567" />
+      <div class="tk-field-label" style="margin-top:14px;">Say something (optional)</div>
+      <textarea class="tk-message-box" id="giftMessage" placeholder="Happy birthday!" oninput="updateGiftPreview()"></textarea>
+      <div class="tk-gift-preview" id="giftPreviewPanel"></div>
+      <div class="inline-notice" id="giftNotice"></div>
+      <button class="tk-pill" onclick="completeGift()">Send gift</button>
+      <div class="tk-fine">Fill in at least one. If they don't have a Waffer account yet, we'll email them to sign up and claim it.</div>
+    </div>
   </div>
 </div>
 
 <!-- QR modal -->
-<div class="modal-overlay" id="qrModal">
-  <div class="modal" style="max-width:340px;text-align:center;">
-    <button class="modal-close" onclick="closeModal('qrModal')">&times;</button>
-    <h3 id="qrTitle" style="margin-top:10px;"></h3>
-    <div style="display:flex;justify-content:center;margin:16px 0;"><div id="qrPattern"></div></div>
-    <div class="voucher-code" id="qrCode" style="font-size:16px;"></div>
-    <p class="note">Show this code to the merchant at redemption.</p>
+<div class="tk-modal-overlay" id="qrModal">
+  <div class="tk-ticket-full" style="margin:auto;max-width:400px;">
+    <button class="tk-modal-close" onclick="closeModal('qrModal')" style="background:rgba(255,255,255,0.15);color:#fff;">&times;</button>
+    <div class="tk-ticket-full-top">
+      <div class="tk-ticket-full-eyebrow"><span>Voucher</span><span id="qrVoucherNo"></span></div>
+      <div class="tk-ticket-full-title" id="qrTitle"></div>
+      <div class="tk-ticket-full-merchant" id="qrMerchantLine"></div>
+    </div>
+    <div class="tk-ticket-full-bottom">
+      <div class="tk-qr-holder"><div id="qrPattern"></div></div>
+      <div class="tk-code-big" id="qrCode"></div>
+      <div class="tk-explainer">Single use. Staff scan it or type the code — it can't be used twice.</div>
+    </div>
   </div>
 </div>
 
 <!-- Purchase success modal -->
-<div class="modal-overlay" id="purchaseSuccessModal">
-  <div class="modal">
-    <button class="modal-close" onclick="closeModal('purchaseSuccessModal')">&times;</button>
-    <div class="success-icon">✓</div>
-    <h3 style="text-align:center;">Payment confirmed</h3>
-    <p class="note" style="text-align:center;margin-bottom:16px;" id="purchaseSuccessSummary"></p>
-    <div id="purchaseSuccessCodes"></div>
-    <button class="btn btn-primary btn-block" onclick="closeModal('purchaseSuccessModal');switchView('wallet');">View my vouchers</button>
+<div class="tk-modal-overlay" id="purchaseSuccessModal">
+  <div class="tk-success" style="margin:auto;">
+    <div class="tk-success-top">
+      <div class="tk-success-check">✓</div>
+      <div class="tk-success-title" id="purchaseSuccessTitle">In your wallet</div>
+      <div class="tk-success-sub" id="purchaseSuccessSummary"></div>
+    </div>
+    <div class="tk-success-bottom">
+      <div id="purchaseSuccessCodes"></div>
+      <button class="tk-pill" onclick="closeModal('purchaseSuccessModal');switchView('wallet');">Open my wallet</button>
+      <div class="tk-receipt-line" id="purchaseReceiptLine"></div>
+    </div>
   </div>
 </div>
 
@@ -352,9 +389,25 @@
     <div class="field"><label>Business name</label><input id="nmName" /></div>
     <div class="field"><label>Category</label><select id="nmCategory"></select></div>
     <div class="field"><label>WhatsApp / contact</label><input id="nmContact" placeholder="+961 XX XXX XXX" /></div>
+    <div class="field"><label>Business email (for payout confirmations)</label><input id="nmEmail" type="email" placeholder="finance@business.com" /></div>
     <div class="field"><label>Logo URL (optional)</label><input id="nmLogoUrl" placeholder="https://... (paste once the merchant provides one)" /></div>
     <div class="inline-notice" id="merchantNotice"></div>
     <button class="btn btn-primary btn-block" onclick="createMerchant()">Add merchant</button>
+  </div>
+</div>
+
+<!-- Admin: edit merchant contact info -->
+<div class="modal-overlay" id="editMerchantModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('editMerchantModal')">&times;</button>
+    <h3>Edit merchant</h3>
+    <input type="hidden" id="emId" />
+    <div class="field"><label>Business name</label><input id="emName" /></div>
+    <div class="field"><label>Category</label><select id="emCategory"></select></div>
+    <div class="field"><label>WhatsApp / contact</label><input id="emContact" /></div>
+    <div class="field"><label>Business email (for payout confirmations)</label><input id="emEmail" type="email" placeholder="finance@business.com" /></div>
+    <div class="inline-notice" id="editMerchantNotice"></div>
+    <button class="btn btn-primary btn-block" onclick="saveMerchantEdit()">Save changes</button>
   </div>
 </div>
 
@@ -447,7 +500,15 @@
     <input type="hidden" id="lpMerchantId" />
     <p class="note" style="margin-top:0;" id="lpOutstandingNote"></p>
     <div class="field"><label>Amount paid (USD)</label><input id="lpAmount" type="number" placeholder="e.g. 150" /></div>
-    <div class="field"><label>Note (optional)</label><input id="lpNote" placeholder="e.g. Bank transfer, Whish reference..." /></div>
+    <div class="field"><label>Payment method</label>
+      <select id="lpMethod">
+        <option>Bank transfer</option>
+        <option>Whish</option>
+        <option>Cash</option>
+        <option>Other</option>
+      </select>
+    </div>
+    <div class="field"><label>Reference / note (optional)</label><input id="lpNote" placeholder="e.g. transaction ID, cheque number..." /></div>
     <div class="inline-notice" id="lpNotice"></div>
     <button class="btn btn-primary btn-block" onclick="submitPayout()">Log payout</button>
   </div>

@@ -64,6 +64,14 @@ function fmtDate(ts) {
   return new Date(ts).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+function fmtDateTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  const datePart = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const timePart = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  return `${datePart}, ${timePart}`;
+}
+
 /* ---------- Customer auth ---------- */
 function setAuthTab(tab) {
   document.querySelectorAll('#authTabs button').forEach(b => b.classList.remove('active'));
@@ -271,6 +279,7 @@ function renderMerchantArea() {
     } else {
       renderFrontDeskView();
     }
+    document.getElementById('merchantPasswordPanel').style.display = currentMerchant.role === 'manager' ? 'block' : 'none';
     const activeView = document.querySelector('.view.active');
     if (activeView && activeView.id === 'view-customer') switchView('merchant');
   } else {
@@ -285,42 +294,128 @@ function renderMerchantArea() {
 
 function renderFrontDeskView() {
   const el = document.getElementById('merchantLoggedInContent');
-  el.innerHTML = `
-    <h2>${currentMerchant.merchantName}</h2>
-    <p class="note" style="margin-bottom:20px;">Front desk account — ${currentMerchant.location || 'this branch'}. You can look up and redeem vouchers. Sales figures aren't shown here.</p>
-    <div class="panel">
-      <h3 style="margin-bottom:14px;">Look up a voucher</h3>
-      <div class="two-col">
-        <div class="field" style="margin-bottom:0;"><label>Voucher code</label><input id="lookupInput" placeholder="e.g. WQ-8F2K91" /></div>
-        <div style="display:flex;align-items:flex-end;"><button class="btn btn-secondary" style="height:41px;" onclick="lookupVoucher()">Check</button></div>
+  el.innerHTML = opRedeemPanel(`${currentMerchant.location || 'front desk'}`);
+  loadRecentRedemptions();
+}
+
+function opRedeemPanel(subLabel) {
+  return `
+    <div class="op-redeem-wrap">
+      <div class="op-redeem-head">
+        <div class="op-redeem-title-row">
+          <img src="logo.png" alt="Waffer" />
+          <div><div class="op-redeem-title">Redeem</div><div class="op-redeem-sub">${currentMerchant.merchantName} · ${subLabel}</div></div>
+        </div>
+        <div class="op-redeem-badges">
+          <span class="op-count-badge" id="opTodayCount">Today: 0 redeemed</span>
+        </div>
       </div>
-      <div id="lookupResult"></div>
-    </div>
-    <div class="panel">
-      <h3 style="margin-bottom:14px;">Redeem a voucher</h3>
-      <div class="two-col">
-        <div class="field" style="margin-bottom:0;"><label>Voucher code</label><input id="redeemInput" placeholder="e.g. WQ-8F2K91" /></div>
-        <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" style="height:41px;" onclick="redeemVoucher()">Verify &amp; redeem</button></div>
+      <div class="op-grid-2">
+        <div class="op-scan-panel">
+          <div class="op-scan-label">Type or paste the code</div>
+          <input class="op-code-input" id="opCodeInput" placeholder="WQ-8F2K91" autocomplete="off" />
+          <button class="op-check-btn" onclick="opCheckCode()">Check</button>
+          <div class="op-cam-row">📷 Camera scan — coming soon</div>
+        </div>
+        <div class="op-result-col">
+          <div id="opResultArea"><div class="op-result-empty">Enter a code to see voucher details here.</div></div>
+          <div class="op-log-panel">
+            <div class="op-log-label">Last redeemed here</div>
+            <div id="opRedeemLog"><div style="font-size:12.5px;color:rgba(255,255,255,0.5);">No redemptions yet.</div></div>
+          </div>
+        </div>
       </div>
-      <div class="inline-notice" id="redeemNotice"></div>
     </div>
   `;
 }
 
-async function lookupVoucher() {
-  const code = document.getElementById('lookupInput').value.trim();
-  const resultEl = document.getElementById('lookupResult');
+let opCurrentLookupVoucher = null;
+
+async function opCheckCode() {
+  const code = document.getElementById('opCodeInput').value.trim();
+  const resultEl = document.getElementById('opResultArea');
   if (!code) return;
+  resultEl.innerHTML = `<div class="op-result-empty">Checking…</div>`;
   try {
     const { voucher } = await api('/api/merchant/voucher-lookup?code=' + encodeURIComponent(code));
+    opCurrentLookupVoucher = voucher;
+    if (voucher.status === 'redeemed') {
+      resultEl.innerHTML = `
+        <div class="op-result-card error">
+          <div class="op-result-eyebrow">Already redeemed</div>
+          <div class="op-result-title">${voucher.offerTitle}</div>
+          <div class="op-result-meta">${voucher.buyerName} · redeemed ${fmtDateTime(voucher.redeemedAt)}</div>
+        </div>`;
+      return;
+    }
+    if (voucher.status === 'pending-claim') {
+      resultEl.innerHTML = `
+        <div class="op-result-card error">
+          <div class="op-result-eyebrow">Not claimed yet</div>
+          <div class="op-result-title">${voucher.offerTitle}</div>
+          <div class="op-result-meta">This gift hasn't been claimed by its recipient yet.</div>
+        </div>`;
+      return;
+    }
+    const expired = voucher.expiryDate && new Date(voucher.expiryDate) < new Date();
+    if (expired) {
+      resultEl.innerHTML = `
+        <div class="op-result-card error">
+          <div class="op-result-eyebrow">Expired</div>
+          <div class="op-result-title">${voucher.offerTitle}</div>
+          <div class="op-result-meta">${voucher.buyerName} · expired ${voucher.expiryDate}</div>
+        </div>`;
+      return;
+    }
     resultEl.innerHTML = `
-      <div class="inline-notice show-success">
-        <strong>${voucher.offerTitle}</strong> &middot; $${voucher.price}<br/>
-        Status: <span class="status-pill status-${voucher.status}">${voucher.status}</span> &middot; Valid until: ${voucher.expiryDate || 'no expiry set'}
+      <div class="op-result-card valid">
+        <div class="op-result-eyebrow">Valid · not used before</div>
+        <div class="op-result-title">${voucher.offerTitle}</div>
+        <div class="op-result-meta">${voucher.buyerName} · bought ${fmtDate(voucher.createdAt)}${voucher.expiryDate ? ' · expires ' + fmtDate(voucher.expiryDate) : ''}</div>
+        ${voucher.terms ? `<div class="op-result-terms">${voucher.terms}</div>` : ''}
+        <button class="op-redeem-confirm-btn" onclick="opConfirmRedeem('${voucher.code}')">Mark as redeemed</button>
       </div>`;
   } catch (e) {
-    resultEl.innerHTML = `<div class="inline-notice show-error">${e.message}</div>`;
+    resultEl.innerHTML = `
+      <div class="op-result-card error">
+        <div class="op-result-eyebrow">Not found</div>
+        <div class="op-result-title" style="font-size:17px;">${e.message}</div>
+      </div>`;
   }
+}
+
+async function opConfirmRedeem(code) {
+  const resultEl = document.getElementById('opResultArea');
+  try {
+    const { voucher } = await api('/api/vouchers/redeem', { method: 'POST', body: { code } });
+    toast(`Redeemed: ${voucher.offerTitle}`, 'success');
+    document.getElementById('opCodeInput').value = '';
+    resultEl.innerHTML = `<div class="op-result-empty">Enter a code to see voucher details here.</div>`;
+    loadRecentRedemptions();
+    if (currentMerchant.role === 'manager') loadMerchantDashboard();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function loadRecentRedemptions() {
+  try {
+    const { redemptions } = await api('/api/merchant/recent-redemptions');
+    const today = new Date().toDateString();
+    const todayCount = redemptions.filter(r => new Date(r.redeemedAt).toDateString() === today).length;
+    const countEl = document.getElementById('opTodayCount');
+    if (countEl) countEl.textContent = `Today: ${todayCount} redeemed`;
+    const logEl = document.getElementById('opRedeemLog');
+    if (!logEl) return;
+    logEl.innerHTML = redemptions.length === 0
+      ? `<div style="font-size:12.5px;color:rgba(255,255,255,0.5);">No redemptions yet.</div>`
+      : redemptions.map(r => `
+        <div class="op-log-row">
+          <span class="op-log-code">${r.code}</span>
+          <span class="op-log-meta">${new Date(r.redeemedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}${r.redeemedByUsername ? ' · ' + r.redeemedByUsername : ''}</span>
+        </div>
+      `).join('');
+  } catch (e) { /* ignore */ }
 }
 
 function renderManagerDashboard() {
@@ -340,18 +435,20 @@ function renderManagerDashboard() {
     </div>
     <div class="panel">
       <h3 style="margin-bottom:14px;">Recent sales</h3>
-      <table><thead><tr><th>Voucher</th><th>Buyer</th><th>Price</th><th>Status</th><th>Date</th></tr></thead><tbody id="mdRecentTable"></tbody></table>
+      <table><thead><tr><th>Voucher</th><th>Buyer</th><th>Price</th><th>Status</th><th>Purchased</th><th>Redeemed</th><th>Branch</th></tr></thead><tbody id="mdRecentTable"></tbody></table>
     </div>
     <div class="panel">
-      <h3 style="margin-bottom:14px;">Redeem a voucher</h3>
-      <div class="two-col">
-        <div class="field" style="margin-bottom:0;"><label>Voucher code</label><input id="redeemInput" placeholder="e.g. WQ-8F2K91" /></div>
-        <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" style="height:41px;" onclick="redeemVoucher()">Verify &amp; redeem</button></div>
+      <h3 style="margin-bottom:14px;">Payouts from Waffer</h3>
+      <div class="stat-grid" style="margin-bottom:16px;">
+        <div class="stat-card"><div class="stat-label">Outstanding balance</div><div class="stat-value" id="mpOutstanding">$0</div></div>
+        <div class="stat-card"><div class="stat-label">Total paid to date</div><div class="stat-value" id="mpTotalPaid">$0</div></div>
       </div>
-      <div class="inline-notice" id="redeemNotice"></div>
+      <table><thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th></tr></thead><tbody id="mpHistoryTable"></tbody></table>
     </div>
+    ${opRedeemPanel('manager view')}
   `;
   loadMerchantDashboard();
+  loadRecentRedemptions();
 }
 
 async function loadMerchantDashboard() {
@@ -361,15 +458,29 @@ async function loadMerchantDashboard() {
     document.getElementById('mdRedeemed').textContent = d.redeemed;
     document.getElementById('mdRevenue').textContent = '$' + d.revenue;
     document.getElementById('mdPayout').textContent = '$' + d.payout;
-    document.getElementById('mdCommissionNote').textContent = `Waffer commission (${Math.round(d.commissionRate * 100)}%): $${d.commission} deducted from sales volume.`;
+    document.getElementById('mdCommissionNote').textContent = `Your current commission rate is ${Math.round(d.commissionRate * 100)}%. Total commission deducted (at the rate active for each sale): $${d.commission}.`;
     document.getElementById('mdOffersTable').innerHTML = d.offers.map(o =>
       `<tr><td>${o.title}</td><td>${o.status}</td><td>${o.sold}</td><td>${o.redeemed}</td><td>$${o.revenue}</td></tr>`
     ).join('') || `<tr><td colspan="5" class="empty">No offers yet.</td></tr>`;
     document.getElementById('mdRecentTable').innerHTML = d.recent.map(v =>
-      `<tr><td class="voucher-code">${v.code}</td><td>${v.buyerName}</td><td>$${v.price}</td><td><span class="status-pill status-${v.status}">${v.status}</span></td><td>${fmtDate(v.createdAt)}</td></tr>`
-    ).join('') || `<tr><td colspan="5" class="empty">No sales yet.</td></tr>`;
+      `<tr><td class="voucher-code">${v.code}</td><td>${v.buyerName}</td><td>$${v.price}</td><td><span class="status-pill status-${v.status}">${v.status}</span></td><td>${fmtDateTime(v.createdAt)}</td><td>${fmtDateTime(v.redeemedAt)}</td><td>${v.redeemedByLocation || '—'}</td></tr>`
+    ).join('') || `<tr><td colspan="7" class="empty">No sales yet.</td></tr>`;
   } catch (e) {
     console.log('dashboard load failed', e.message);
+  }
+  loadMerchantPayouts();
+}
+
+async function loadMerchantPayouts() {
+  try {
+    const d = await api('/api/merchant/payouts');
+    document.getElementById('mpOutstanding').textContent = '$' + d.outstanding;
+    document.getElementById('mpTotalPaid').textContent = '$' + d.totalPaid;
+    document.getElementById('mpHistoryTable').innerHTML = d.payouts.map(p =>
+      `<tr><td>${fmtDateTime(p.createdAt)}</td><td>$${p.amount}</td><td>${p.method || 'Other'}</td><td>${p.note || '—'}</td></tr>`
+    ).join('') || `<tr><td colspan="4" class="empty">No payouts logged yet.</td></tr>`;
+  } catch (e) {
+    console.log('payouts load failed', e.message);
   }
 }
 
@@ -415,12 +526,39 @@ function switchView(view) {
   document.querySelectorAll('.topnav button').forEach(b => b.classList.remove('active'));
   const navBtn = document.querySelector(`.topnav [data-view="${view}"]`);
   if (navBtn) navBtn.classList.add('active');
+  document.querySelectorAll('.tk-tabbar-item').forEach(b => b.classList.remove('active'));
+  const tabBtn = document.querySelector(`.tk-tabbar-item[data-tab="${view === 'customer' ? 'customer' : view}"]`);
+  if (tabBtn) tabBtn.classList.add('active');
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById('view-' + view).classList.add('active');
+  document.querySelector('main.container').classList.toggle('customer-flow', view === 'customer' || view === 'wallet');
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (view === 'wallet') renderWallet();
   if (view === 'admin') renderAdmin();
   if (view === 'merchant') renderMerchantArea();
+}
+
+function tabBarGo(tab) {
+  if (tab === 'customer') { switchView('customer'); return; }
+  if (tab === 'ask') {
+    switchView('customer');
+    setTimeout(() => { const el = document.getElementById('aiQuery'); if (el) el.focus(); }, 300);
+    document.querySelectorAll('.tk-tabbar-item').forEach(b => b.classList.remove('active'));
+    document.querySelector('.tk-tabbar-item[data-tab="ask"]').classList.add('active');
+    return;
+  }
+  if (tab === 'wallet') {
+    if (!currentUser) { openModal('authModal'); return; }
+    switchView('wallet');
+    return;
+  }
+  if (tab === 'you') {
+    if (!currentUser) { openModal('authModal'); return; }
+    openProfile();
+    document.querySelectorAll('.tk-tabbar-item').forEach(b => b.classList.remove('active'));
+    document.querySelector('.tk-tabbar-item[data-tab="you"]').classList.add('active');
+    return;
+  }
 }
 
 document.getElementById('topnav').addEventListener('click', (e) => {
@@ -495,6 +633,28 @@ function ratingRow(o) {
   return `<span class="rating-row"><span class="stars">${starString(o.avgRating)}</span> ${o.avgRating} (${o.reviewCount})</span>`;
 }
 
+async function renderDealOfDay() {
+  try {
+    const { offers } = await api('/api/offers');
+    const slot = document.getElementById('dealOfDaySlot');
+    if (!slot) return;
+    if (!offers.length) { slot.innerHTML = ''; return; }
+    const best = [...offers].sort((a, b) => (1 - a.price / a.original) < (1 - b.price / b.original) ? 1 : -1)[0];
+    const pct = Math.round((1 - best.price / best.original) * 100);
+    slot.innerHTML = `
+      <div class="deal-of-day">
+        <div class="dod-eyebrow"><span>Deal of the day</span><span>${best.category}</span></div>
+        <div class="dod-title">${best.title}</div>
+        <div class="dod-merchant">${best.merchantName}</div>
+        <div class="dod-perf"></div>
+        <div class="dod-bottom">
+          <div><div class="dod-price">$${best.price}</div><div class="dod-was">$${best.original}</div></div>
+          <div class="dod-cta" onclick="openOfferById(${best.id})">Grab it${pct ? ` · ${pct}% off` : ''}</div>
+        </div>
+      </div>`;
+  } catch (e) { /* ignore */ }
+}
+
 async function renderOffers() {
   const search = document.getElementById('searchInput').value;
   const params = new URLSearchParams();
@@ -532,38 +692,59 @@ async function renderOffers() {
   }).join('');
 }
 
+function termsToBullets(terms) {
+  if (!terms) return [];
+  const parts = terms.split(/(?<=[.;])\s+/).map(s => s.trim()).filter(Boolean);
+  return parts.length > 0 ? parts : [terms];
+}
+
 function openOffer(id) {
   currentOffer = window.__offersCache.find(o => o.id === id);
   purchaseQty = 1;
   const pct = Math.round((1 - currentOffer.price / currentOffer.original) * 100);
+  const saved = (currentOffer.original - currentOffer.price).toFixed(2).replace(/\.00$/, '');
   document.getElementById('offerModalBody').innerHTML = `
-    ${currentOffer.imageUrl ? `<img class="offer-hero-img" src="${currentOffer.imageUrl}" alt="${currentOffer.title}" />` : ''}
-    <div class="offer-cat">${currentOffer.category}</div>
-    <h3>${currentOffer.title}</h3>
-    <div class="offer-merchant">${currentOffer.merchantName}</div>
-    ${ratingRow(currentOffer)}
-    <div class="offer-price-row" style="margin:14px 0;">
-      <span class="price-now" style="font-size:24px;">$${currentOffer.price}</span>
-      <span class="price-was">$${currentOffer.original}</span>
-      <span class="discount-badge">${pct}% off</span>
-    </div>
-    <div class="terms-box"><strong>Terms:</strong> ${currentOffer.terms}</div>
-    <div class="qty-row">
-      <label>Quantity</label>
-      <div class="qty-stepper">
-        <button onclick="changeQty(-1)">−</button>
-        <span id="qtyValue">1</span>
-        <button onclick="changeQty(1)">+</button>
+    <div class="tk-crumb"><strong onclick="closeModal('offerModal')" style="cursor:pointer;">← ${currentOffer.category}</strong><span>/</span><span>${currentOffer.merchantName}</span></div>
+    <div class="tk-detail-body">
+      <div>
+        <div class="tk-hero-img">${currentOffer.imageUrl ? `<img src="${currentOffer.imageUrl}" alt="${currentOffer.title}" />` : 'Offer photo'}</div>
+        <div class="tk-eyebrow">${currentOffer.category} · ${currentOffer.merchantName}</div>
+        <h2 class="tk-title">${currentOffer.title}</h2>
+        <div class="tk-merchant-row">
+          <span class="tk-avatar">${currentOffer.merchantInitials || '??'}</span>
+          ${currentOffer.merchantName}
+          ${currentOffer.reviewCount ? `<span class="stars">${starString(currentOffer.avgRating)}</span><strong>${currentOffer.avgRating}</strong>(${currentOffer.reviewCount})` : '<span style="color:var(--ink-faint);">No reviews yet</span>'}
+        </div>
+        <div class="tk-perf-h">
+          <div class="tk-eyebrow" style="margin-top:0;">The fine print</div>
+          <div class="tk-terms-list">
+            ${termsToBullets(currentOffer.terms).map(t => `<div><span>·</span>${t}</div>`).join('')}
+          </div>
+        </div>
+        <div class="tk-perf-h">
+          <div class="tk-eyebrow" style="margin-top:0;">What people said</div>
+          <div class="tk-review-grid" id="reviewsList">Loading...</div>
+        </div>
       </div>
-      <span class="qty-total">Total: $<span id="qtyTotal">${currentOffer.price}</span></span>
+      <div class="tk-panel tk-panel-sticky">
+        <div class="tk-panel-eyebrow"><span>Voucher</span><span>${currentOffer.merchantName}</span></div>
+        <div class="tk-panel-price"><span class="now">$${currentOffer.price}</span><span class="was">$${currentOffer.original}</span></div>
+        <div class="tk-save-chip">You save $${saved} · ${pct}% off</div>
+        <div class="tk-panel-perf"></div>
+        <div class="tk-qty-row">
+          <div class="tk-panel-eyebrow" style="font-size:10.5px;">Quantity</div>
+          <div class="tk-qty-stepper">
+            <button onclick="changeQty(-1)">−</button>
+            <span id="qtyValue">1</span>
+            <button onclick="changeQty(1)">+</button>
+          </div>
+        </div>
+        <div class="tk-total-row">Total<span class="fig" id="qtyTotal">$${currentOffer.price}</span></div>
+        <button class="tk-pill" onclick="startPurchase()">Buy voucher</button>
+        <button class="tk-pill-ghost" onclick="startGift()">Send as a gift</button>
+        <div class="tk-legal">Paid via simulated checkout for this build. Lands in your wallet instantly. Gift recipients need a Waffer account — we check the email before you pay.</div>
+      </div>
     </div>
-    <div class="btn-row">
-      <button class="btn btn-primary" style="flex:1;" onclick="startPurchase()">Buy for myself</button>
-      <button class="btn btn-secondary" style="flex:1;" onclick="startGift()">Send as gift</button>
-    </div>
-    <hr class="modal-divider" />
-    <h3 style="font-size:15px;">Reviews</h3>
-    <div id="reviewsList">Loading...</div>
   `;
   openModal('offerModal');
   loadReviews(id);
@@ -574,11 +755,11 @@ async function loadReviews(offerId) {
     const { reviews } = await api(`/api/offers/${offerId}/reviews`);
     const el = document.getElementById('reviewsList');
     if (!el) return;
-    el.innerHTML = reviews.length === 0 ? `<div class="empty">No reviews yet.</div>` : reviews.map(r => `
-      <div class="review-item">
-        <span class="review-stars">${starString(r.rating)}</span>
-        ${r.comment ? `<div>${r.comment}</div>` : ''}
-        <div class="review-meta">${r.userName} &middot; ${fmtDate(r.createdAt)}</div>
+    el.innerHTML = reviews.length === 0 ? `<div style="color:var(--ink-faint);font-size:13.5px;">No reviews yet — be the first to redeem and share one.</div>` : reviews.map(r => `
+      <div class="tk-review-card">
+        <div class="stars">${starString(r.rating)}</div>
+        ${r.comment ? `<p>${r.comment}</p>` : ''}
+        <div class="meta">${r.userName} · ${fmtDate(r.createdAt)}</div>
       </div>
     `).join('');
   } catch (e) { /* ignore */ }
@@ -587,26 +768,79 @@ async function loadReviews(offerId) {
 function changeQty(delta) {
   purchaseQty = Math.max(1, Math.min(20, purchaseQty + delta));
   document.getElementById('qtyValue').textContent = purchaseQty;
-  document.getElementById('qtyTotal').textContent = (currentOffer.price * purchaseQty).toFixed(2).replace(/\.00$/, '');
+  document.getElementById('qtyTotal').textContent = '$' + (currentOffer.price * purchaseQty).toFixed(2).replace(/\.00$/, '');
 }
 
 function startPurchase() {
   if (!currentUser) { closeModal('offerModal'); openModal('authModal'); return; }
   closeModal('offerModal');
   const total = (currentOffer.price * purchaseQty).toFixed(2).replace(/\.00$/, '');
-  document.getElementById('purchaseSummary').innerHTML = `<strong>${currentOffer.title}</strong> — ${purchaseQty} × $${currentOffer.price} = $${total}`;
+  document.getElementById('purchaseSummary').innerHTML = `
+    <div class="tk-line-item">
+      <div class="tk-avatar">${currentOffer.merchantInitials || '??'}</div>
+      <div class="info"><div class="t">${currentOffer.title}</div><div class="m">${currentOffer.merchantName} · qty ${purchaseQty}</div></div>
+      <strong>$${total}</strong>
+    </div>`;
+  document.getElementById('purchaseTotalFig').textContent = '$' + total;
+  document.getElementById('purchasePayBtn').textContent = 'Pay $' + total;
   openModal('purchaseModal');
 }
 
 function startGift() {
   if (!currentUser) { closeModal('offerModal'); openModal('authModal'); return; }
   closeModal('offerModal');
-  document.getElementById('giftSummary').innerHTML = `<strong>${currentOffer.title}</strong> — $${currentOffer.price}`;
+  document.getElementById('giftSummary').innerHTML = `
+    <div class="tk-line-item">
+      <div class="tk-avatar">${currentOffer.merchantInitials || '??'}</div>
+      <div class="info"><div class="t">${currentOffer.title}</div><div class="m">${currentOffer.merchantName}</div></div>
+      <strong>$${currentOffer.price}</strong>
+    </div>`;
   document.getElementById('giftEmail').value = '';
   document.getElementById('giftPhone').value = '';
   document.getElementById('giftMessage').value = '';
+  document.getElementById('giftLookupNote').textContent = '';
+  document.getElementById('giftPreviewPanel').style.display = 'none';
   clearNotice('giftNotice');
   openModal('giftModal');
+}
+
+let giftLookupTimer = null;
+async function checkGiftRecipient() {
+  clearTimeout(giftLookupTimer);
+  const email = document.getElementById('giftEmail').value.trim();
+  const input = document.getElementById('giftEmail');
+  const note = document.getElementById('giftLookupNote');
+  input.classList.remove('valid');
+  if (!email || !email.includes('@')) { note.textContent = ''; updateGiftPreview(); return; }
+  giftLookupTimer = setTimeout(async () => {
+    try {
+      const { exists, name, isSelf } = await api('/api/users/lookup?email=' + encodeURIComponent(email));
+      if (isSelf) {
+        note.innerHTML = `<span style="color:var(--danger);font-weight:700;">You can't gift a voucher to yourself.</span>`;
+      } else if (exists) {
+        input.classList.add('valid');
+        note.innerHTML = `<span style="color:var(--success);font-weight:700;">${name} has an account — good to go.</span>`;
+      } else {
+        note.innerHTML = `<span style="color:var(--gold-ink);font-weight:700;">No account yet — we'll email them to sign up and claim it.</span>`;
+      }
+      updateGiftPreview();
+    } catch (e) { /* ignore */ }
+  }, 400);
+}
+
+function updateGiftPreview() {
+  const email = document.getElementById('giftEmail').value.trim();
+  const panel = document.getElementById('giftPreviewPanel');
+  if (!email) { panel.style.display = 'none'; return; }
+  const message = document.getElementById('giftMessage').value.trim();
+  panel.style.display = 'block';
+  panel.innerHTML = `
+    <div class="label">They'll see</div>
+    <div class="headline">${currentUser ? currentUser.name.split(' ')[0] : 'You'} sent them ${currentOffer.title}</div>
+    ${message ? `<div style="font-size:13px;color:rgba(255,255,255,0.85);margin-top:8px;font-style:italic;">"${message}"</div>` : ''}
+    <div class="rule"></div>
+    <div class="note">If they don't have an account yet, it sits as <strong>Pending claim</strong> until they sign up — cancel any time before then.</div>
+  `;
 }
 
 async function completePurchase() {
@@ -614,8 +848,10 @@ async function completePurchase() {
     const { vouchers, total } = await api('/api/vouchers/purchase', { method: 'POST', body: { offerId: currentOffer.id, quantity: purchaseQty } });
     closeModal('purchaseModal');
     renderOffers();
-    document.getElementById('purchaseSuccessSummary').textContent = `${currentOffer.title} — $${total} total. A receipt has been emailed to you.`;
-    document.getElementById('purchaseSuccessCodes').innerHTML = vouchers.map(v => `<div class="purchase-code-row">${v.code}</div>`).join('');
+    document.getElementById('purchaseSuccessTitle').textContent = vouchers.length > 1 ? `${vouchers.length} tickets, in your wallet` : 'One ticket, in your wallet';
+    document.getElementById('purchaseSuccessSummary').textContent = `Show either code at ${currentOffer.merchantName}. Each one works once.`;
+    document.getElementById('purchaseSuccessCodes').innerHTML = vouchers.map(v => `<div class="tk-code-chip">${v.code}</div>`).join('');
+    document.getElementById('purchaseReceiptLine').textContent = currentUser ? `Receipt sent to ${currentUser.email}` : '';
     openModal('purchaseSuccessModal');
   } catch (e) {
     toast(e.message, 'error');
@@ -660,41 +896,68 @@ function expiryBadge(v) {
 }
 
 /* ---------- Wallet ---------- */
+let walletFilter = 'all';
+function setWalletFilter(f) { walletFilter = f; renderWalletList(); }
+
 async function renderWallet() {
   const { vouchers } = await api('/api/vouchers/mine');
   window.__myVouchersCache = vouchers;
-  const el = document.getElementById('walletList');
-  if (vouchers.length === 0) { el.innerHTML = `<div class="empty">No vouchers yet. Buy an offer to see it here.</div>`; }
-  else {
-    el.innerHTML = vouchers.map(v => `
-      <div class="voucher-card">
-        <div class="voucher-left">
-          <h4>${v.offerTitle}${v.giftedTo ? ' <span style="font-weight:400;color:var(--muted);font-size:12px;">(gift)</span>' : ''}</h4>
-          <div class="voucher-meta">${v.merchantName} &middot; ${v.discountPct != null ? v.discountPct + '% off' : ''} &middot; $${v.price}${v.expiryDate ? ' &middot; valid until ' + v.expiryDate : ''}</div>
-          <div class="voucher-code-row">Code: <span class="voucher-code">${v.code}</span> ${expiryBadge(v)}</div>
-          ${v.status === 'redeemed' && !v.hasReviewed ? `<div style="margin-top:8px;"><button class="btn btn-secondary" onclick="openWalletReview(${v.offerId})">Rate this experience</button></div>` : ''}
-        </div>
-        <div style="display:flex;align-items:center;gap:10px;">
-          <span class="status-pill status-${v.status}">${v.status}</span>
-          ${v.status === 'active' ? `<button class="btn btn-secondary" onclick="showQR('${v.code}')">Show QR</button>` : ''}
-        </div>
-      </div>
-    `).join('');
-  }
+  renderWalletList();
 
   const { vouchers: sent } = await api('/api/vouchers/sent');
   const sentEl = document.getElementById('sentList');
-  if (sent.length === 0) { sentEl.innerHTML = `<div class="empty">You haven't sent any gifts yet.</div>`; return; }
+  if (sent.length === 0) { sentEl.innerHTML = `<div class="tk-empty"><p>You haven't sent any gifts yet.</p></div>`; return; }
   sentEl.innerHTML = sent.map(v => `
-    <div class="voucher-card">
-      <div class="voucher-left">
-        <h4>${v.offerTitle}</h4>
-        <div class="voucher-meta">To ${v.giftedTo || v.recipientEmail || v.recipientPhone || 'pending'} &middot; $${v.price}</div>
-        <div class="voucher-code-row">Code: <span class="voucher-code">${v.code}</span></div>
+    <div class="tk-ticket-card">
+      <div class="tk-ticket-top">
+        <div class="tk-avatar">${(v.merchantName || '??').slice(0, 2).toUpperCase()}</div>
+        <div class="info"><div class="t">${v.offerTitle}</div><div class="m">To ${v.giftedTo || v.recipientEmail || v.recipientPhone || 'pending'} · $${v.price}</div></div>
+        <span class="tk-state-badge ${v.status === 'pending-claim' ? 'tk-state-expiring' : 'tk-state-ready'}">${v.status === 'pending-claim' ? 'awaiting sign-up' : v.status}</span>
       </div>
-      <span class="status-pill status-${v.status}">${v.status === 'pending-claim' ? 'awaiting sign-up' : v.status}</span>
+      <div class="tk-ticket-bottom"><span class="code">${v.code}</span></div>
     </div>
   `).join('');
+}
+
+function renderWalletList() {
+  const vouchers = window.__myVouchersCache || [];
+  const activeCount = vouchers.filter(v => v.status === 'active').length;
+  const usedCount = vouchers.filter(v => v.status === 'redeemed').length;
+  document.getElementById('walletFilterPills').innerHTML = `
+    <span class="tk-filter-pill ${walletFilter === 'all' ? 'active' : ''}" onclick="setWalletFilter('all')">All ${vouchers.length}</span>
+    <span class="tk-filter-pill ${walletFilter === 'active' ? 'active' : ''}" onclick="setWalletFilter('active')">Active ${activeCount}</span>
+    <span class="tk-filter-pill ${walletFilter === 'used' ? 'active' : ''}" onclick="setWalletFilter('used')">Used ${usedCount}</span>
+  `;
+  const filtered = walletFilter === 'all' ? vouchers : vouchers.filter(v => walletFilter === 'active' ? v.status === 'active' : v.status === 'redeemed');
+  const el = document.getElementById('walletList');
+  if (filtered.length === 0) {
+    el.innerHTML = `<div class="tk-empty"><p>${vouchers.length === 0 ? 'No tickets yet.' : 'Nothing in this filter.'}</p><button class="tk-pill" style="max-width:200px;" onclick="switchView('customer')">Browse offers</button></div>`;
+    return;
+  }
+  el.innerHTML = filtered.map(v => {
+    if (v.status === 'redeemed') {
+      return `
+        <div class="tk-used-card">
+          <div class="tile">${(v.merchantName || '??').slice(0, 2).toUpperCase()}</div>
+          <div class="info"><div class="t" style="font-family:var(--font-display);font-size:16px;font-weight:700;color:var(--ink);">${v.offerTitle}</div><div class="m" style="font-size:11.5px;color:var(--ink-faint);">Redeemed ${fmtDate(v.redeemedAt)}</div></div>
+          <span class="tk-state-badge tk-state-used">Used</span>
+          ${!v.hasReviewed ? `<button class="tk-cancel-link" onclick="openWalletReview(${v.offerId})">Rate it</button>` : ''}
+        </div>`;
+    }
+    const badge = expiryBadge(v);
+    return `
+      <div class="tk-ticket-card">
+        <div class="tk-ticket-top">
+          <div class="tk-avatar">${(v.merchantName || '??').slice(0, 2).toUpperCase()}</div>
+          <div class="info"><div class="t">${v.offerTitle}${v.giftedTo ? ' <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(gift)</span>' : ''}</div><div class="m">${v.merchantName}${v.expiryDate ? ' · until ' + v.expiryDate : ''}</div></div>
+          ${badge ? `<span class="tk-state-badge tk-state-expiring">${badge}</span>` : `<span class="tk-state-badge tk-state-ready">Ready</span>`}
+        </div>
+        <div class="tk-ticket-bottom">
+          <span class="code">${v.code}</span>
+          <button class="tk-show-btn" onclick="showQR('${v.code}')">Show ticket</button>
+        </div>
+      </div>`;
+  }).join('');
 }
 
 function openWalletReview(offerId) {
@@ -722,27 +985,18 @@ async function submitWalletReview() {
 }
 
 function showQR(code) {
-  document.getElementById('qrTitle').textContent = 'Voucher QR';
+  const v = (window.__myVouchersCache || []).find(x => x.code === code);
+  document.getElementById('qrVoucherNo').textContent = v ? 'No. ' + v.code.replace(/[^0-9]/g, '').slice(-5) : '';
+  document.getElementById('qrTitle').textContent = v ? v.offerTitle : 'Voucher';
+  document.getElementById('qrMerchantLine').textContent = v ? v.merchantName : '';
   document.getElementById('qrCode').textContent = code;
   const container = document.getElementById('qrPattern');
   container.innerHTML = '';
-  new QRCode(container, { text: code, width: 160, height: 160, colorDark: '#1E293B', colorLight: '#FFFFFF' });
+  new QRCode(container, { text: code, width: 160, height: 160, colorDark: '#22063E', colorLight: '#FFFFFF' });
   openModal('qrModal');
 }
 
 /* ---------- Merchant redeem ---------- */
-async function redeemVoucher() {
-  const input = document.getElementById('redeemInput');
-  try {
-    const { voucher } = await api('/api/vouchers/redeem', { method: 'POST', body: { code: input.value } });
-    showNotice('redeemNotice', `Voucher ${voucher.code} redeemed successfully for "${voucher.offerTitle}".`, 'success');
-    input.value = '';
-    if (currentMerchant && currentMerchant.role === 'manager') loadMerchantDashboard();
-  } catch (e) {
-    showNotice('redeemNotice', e.message, 'error');
-  }
-}
-
 /* ---------- Admin ---------- */
 async function renderCategoryManageList() {
   const { categories } = await api('/api/admin/categories');
@@ -812,8 +1066,9 @@ async function renderAdmin() {
         <button class="row-btn" onclick="document.getElementById('logoFile-${m.id}').click()">Upload logo</button>
       </td>
       <td><button class="row-btn" onclick="openAccountsModal(${m.id}, '${m.name.replace(/'/g, "\\'")}')">Manage accounts</button></td>
+      <td><button class="row-btn" onclick='openEditMerchant(${m.id}, ${JSON.stringify(m.name)}, ${JSON.stringify(m.category)}, ${JSON.stringify(m.contact || "")}, ${JSON.stringify(m.email || "")})'>Edit</button></td>
     </tr>
-  `).join('') || `<tr><td colspan="6" class="empty">No merchants yet.</td></tr>`;
+  `).join('') || `<tr><td colspan="7" class="empty">No merchants yet.</td></tr>`;
 
   window.__adminOffersCache = (await api('/api/admin/offers')).offers;
   document.getElementById('adminOfferTable').innerHTML = window.__adminOffersCache.map(o => `
@@ -909,8 +1164,8 @@ async function openOfferDetail(id) {
         <div class="stat-card"><div class="stat-label">Commission (${Math.round(d.commissionRate * 100)}%)</div><div class="stat-value">$${d.commission}</div></div>
       </div>
       <p class="note" style="margin-bottom:14px;">Merchant payout: <strong>$${d.payout}</strong></p>
-      <table><thead><tr><th>Code</th><th>Buyer</th><th>Status</th><th>Purchased</th><th>Redeemed</th></tr></thead><tbody>
-        ${d.vouchers.map(v => `<tr><td class="voucher-code">${v.code}</td><td>${v.buyerName}${v.isGift ? ' (gift)' : ''}</td><td><span class="status-pill status-${v.status}">${v.status}</span></td><td>${fmtDate(v.createdAt)}</td><td>${fmtDate(v.redeemedAt)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">No sales yet.</td></tr>'}
+      <table><thead><tr><th>Code</th><th>Buyer</th><th>Status</th><th>Purchased</th><th>Redeemed</th><th>Branch</th></tr></thead><tbody>
+        ${d.vouchers.map(v => `<tr><td class="voucher-code">${v.code}</td><td>${v.buyerName}${v.isGift ? ' (gift)' : ''}</td><td><span class="status-pill status-${v.status}">${v.status}</span></td><td>${fmtDateTime(v.createdAt)}</td><td>${fmtDateTime(v.redeemedAt)}</td><td>${v.redeemedByLocation || '—'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">No sales yet.</td></tr>'}
       </tbody></table>
     `;
     openModal('offerDetailModal');
@@ -986,9 +1241,10 @@ async function submitPayout() {
   clearNotice('lpNotice');
   const merchantId = document.getElementById('lpMerchantId').value;
   const amount = document.getElementById('lpAmount').value;
+  const payoutMethod = document.getElementById('lpMethod').value;
   const note = document.getElementById('lpNote').value.trim();
   try {
-    await api(`/api/admin/merchants/${merchantId}/payouts`, { method: 'POST', body: { amount, note } });
+    await api(`/api/admin/merchants/${merchantId}/payouts`, { method: 'POST', body: { amount, method: payoutMethod, note } });
     closeModal('logPayoutModal');
     loadFinance();
     toast('Payout logged.', 'success');
@@ -1022,11 +1278,13 @@ async function createMerchant() {
   const name = document.getElementById('nmName').value.trim();
   const category = document.getElementById('nmCategory').value;
   const contact = document.getElementById('nmContact').value.trim();
+  const email = document.getElementById('nmEmail').value.trim();
   const logoUrl = document.getElementById('nmLogoUrl').value.trim();
   try {
-    const { merchant, managerUsername, tempPassword } = await api('/api/admin/merchants', { method: 'POST', body: { name, category, contact, logoUrl } });
+    const { merchant, managerUsername, tempPassword } = await api('/api/admin/merchants', { method: 'POST', body: { name, category, contact, email, logoUrl } });
     document.getElementById('nmName').value = '';
     document.getElementById('nmContact').value = '';
+    document.getElementById('nmEmail').value = '';
     document.getElementById('nmLogoUrl').value = '';
     closeModal('newMerchantModal');
     renderAdmin();
@@ -1034,6 +1292,35 @@ async function createMerchant() {
     openModal('credentialsModal');
   } catch (e) {
     showNotice('merchantNotice', e.message, 'error');
+  }
+}
+
+function openEditMerchant(id, name, category, contact, email) {
+  document.getElementById('emId').value = id;
+  document.getElementById('emName').value = name;
+  document.getElementById('emCategory').innerHTML = (window.__categoriesCache || []).map(c => `<option ${c.name === category ? 'selected' : ''}>${c.name}</option>`).join('');
+  document.getElementById('emContact').value = contact || '';
+  document.getElementById('emEmail').value = email || '';
+  clearNotice('editMerchantNotice');
+  openModal('editMerchantModal');
+}
+
+async function saveMerchantEdit() {
+  clearNotice('editMerchantNotice');
+  const id = document.getElementById('emId').value;
+  const body = {
+    name: document.getElementById('emName').value.trim(),
+    category: document.getElementById('emCategory').value,
+    contact: document.getElementById('emContact').value.trim(),
+    email: document.getElementById('emEmail').value.trim()
+  };
+  try {
+    await api(`/api/admin/merchants/${id}`, { method: 'PATCH', body });
+    closeModal('editMerchantModal');
+    renderAdmin();
+    toast('Merchant updated.', 'success');
+  } catch (e) {
+    showNotice('editMerchantNotice', e.message, 'error');
   }
 }
 
@@ -1168,6 +1455,7 @@ document.getElementById('aiQuery').addEventListener('keyup', (e) => { if (e.key 
   await loadCategories();
   renderChips();
   renderOffers();
+  renderDealOfDay();
 
   const params = new URLSearchParams(location.search);
   const resetToken = params.get('resetToken');
