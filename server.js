@@ -50,8 +50,22 @@ function slugify(name) {
   return (name || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 20) || 'merchant';
 }
 
+function generatePassword() {
+  const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  let out = '';
+  for (let i = 0; i < 10; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
 function money(n) {
   return Math.round(n * 100) / 100;
+}
+
+function reviewStats(offerId) {
+  const list = data.reviews.filter(r => r.offerId === offerId);
+  if (list.length === 0) return { avgRating: null, reviewCount: 0 };
+  const avg = list.reduce((a, r) => a + r.rating, 0) / list.length;
+  return { avgRating: Math.round(avg * 10) / 10, reviewCount: list.length };
 }
 
 async function sendEmail(to, subject, html) {
@@ -82,9 +96,9 @@ function currentUser(req) {
   return data.users.find(u => u.id === req.session.userId) || null;
 }
 
-function currentMerchant(req) {
-  if (!req.session.merchantId) return null;
-  return data.merchants.find(m => m.id === req.session.merchantId) || null;
+function currentMerchantAccount(req) {
+  if (!req.session.merchantAccountId) return null;
+  return data.merchantAccounts.find(a => a.id === req.session.merchantAccountId) || null;
 }
 
 function requireAuth(req, res, next) {
@@ -102,10 +116,22 @@ function requireAdmin(req, res, next) {
 }
 
 function requireMerchant(req, res, next) {
-  const merchant = currentMerchant(req);
-  if (!merchant) return res.status(401).json({ error: 'Please log in with your business account first.' });
-  req.merchant = merchant;
+  const account = currentMerchantAccount(req);
+  if (!account) return res.status(401).json({ error: 'Please log in with your business account first.' });
+  const business = data.merchants.find(m => m.id === account.merchantId);
+  if (!business) return res.status(401).json({ error: 'Business account not found.' });
+  req.merchantAccount = account;
+  req.merchant = business;
   next();
+}
+
+function requireMerchantManager(req, res, next) {
+  requireMerchant(req, res, () => {
+    if (req.merchantAccount.role !== 'manager') {
+      return res.status(403).json({ error: 'This area is only available to managerial accounts.' });
+    }
+    next();
+  });
 }
 
 function publicUser(u) {
@@ -113,7 +139,11 @@ function publicUser(u) {
 }
 
 function publicMerchant(m) {
-  return { id: m.id, name: m.name, category: m.category, contact: m.contact, username: m.username, logoUrl: m.logoUrl || null };
+  return { id: m.id, name: m.name, category: m.category, contact: m.contact, logoUrl: m.logoUrl || null };
+}
+
+function publicMerchantAccount(a, business) {
+  return { accountId: a.id, merchantId: a.merchantId, merchantName: business ? business.name : null, role: a.role, location: a.location || null, username: a.username };
 }
 
 function originOf(req) {
@@ -195,6 +225,16 @@ app.patch('/api/auth/profile', requireAuth, (req, res) => {
   res.json({ user: publicUser(req.user) });
 });
 
+app.post('/api/auth/change-password', requireAuth, (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Enter your current and new password.' });
+  if (!bcrypt.compareSync(currentPassword, req.user.passwordHash)) return res.status(400).json({ error: 'Current password is incorrect.' });
+  if (newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters.' });
+  req.user.passwordHash = bcrypt.hashSync(newPassword, 8);
+  db.save();
+  res.json({ ok: true });
+});
+
 app.post('/api/auth/forgot-password', async (req, res) => {
   const { email } = req.body;
   const user = data.users.find(u => u.email.toLowerCase() === (email || '').toLowerCase());
@@ -247,25 +287,54 @@ app.post('/api/auth/resend-verification', requireAuth, async (req, res) => {
 /* ---------- Merchant auth ---------- */
 app.post('/api/merchant/login', (req, res) => {
   const { username, password } = req.body;
-  const merchant = data.merchants.find(m => m.username && m.username.toLowerCase() === (username || '').toLowerCase());
-  if (!merchant || !merchant.passwordHash || !bcrypt.compareSync(password || '', merchant.passwordHash)) {
+  const account = data.merchantAccounts.find(a => a.username && a.username.toLowerCase() === (username || '').toLowerCase());
+  if (!account || !bcrypt.compareSync(password || '', account.passwordHash)) {
     return res.status(400).json({ error: 'Incorrect username or password.' });
   }
-  req.session.merchantId = merchant.id;
-  res.json({ merchant: publicMerchant(merchant) });
+  const business = data.merchants.find(m => m.id === account.merchantId);
+  req.session.merchantAccountId = account.id;
+  res.json({ merchant: publicMerchantAccount(account, business) });
 });
 
 app.post('/api/merchant/logout', (req, res) => {
-  req.session.merchantId = null;
+  req.session.merchantAccountId = null;
   res.json({ ok: true });
 });
 
 app.get('/api/merchant/me', (req, res) => {
-  const merchant = currentMerchant(req);
-  res.json({ merchant: merchant ? publicMerchant(merchant) : null });
+  const account = currentMerchantAccount(req);
+  const business = account ? data.merchants.find(m => m.id === account.merchantId) : null;
+  res.json({ merchant: account ? publicMerchantAccount(account, business) : null });
 });
 
-app.get('/api/merchant/dashboard', requireMerchant, (req, res) => {
+app.post('/api/merchant/change-password', requireMerchant, (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Enter your current and new password.' });
+  if (!bcrypt.compareSync(currentPassword, req.merchantAccount.passwordHash)) return res.status(400).json({ error: 'Current password is incorrect.' });
+  if (newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters.' });
+  req.merchantAccount.passwordHash = bcrypt.hashSync(newPassword, 8);
+  db.save();
+  res.json({ ok: true });
+});
+
+app.get('/api/merchant/voucher-lookup', requireMerchant, (req, res) => {
+  const code = (req.query.code || '').trim().toUpperCase();
+  if (!code) return res.status(400).json({ error: 'Enter a voucher code.' });
+  const voucher = data.vouchers.find(v => v.code === code);
+  if (!voucher) return res.status(404).json({ error: 'No voucher found with that code.' });
+  const offer = data.offers.find(o => o.id === voucher.offerId);
+  if (!offer || offer.merchantId !== req.merchant.id) {
+    return res.status(403).json({ error: 'This voucher was not issued for your business.' });
+  }
+  res.json({
+    voucher: {
+      code: voucher.code, offerTitle: voucher.offerTitle, price: voucher.price,
+      status: voucher.status, expiryDate: voucher.expiryDate, redeemedAt: voucher.redeemedAt
+    }
+  });
+});
+
+app.get('/api/merchant/dashboard', requireMerchantManager, (req, res) => {
   const myOffers = data.offers.filter(o => o.merchantId === req.merchant.id);
   const myOfferIds = myOffers.map(o => o.id);
   const myVouchers = data.vouchers.filter(v => myOfferIds.includes(v.offerId));
@@ -276,7 +345,7 @@ app.get('/api/merchant/dashboard', requireMerchant, (req, res) => {
   const payout = money(revenue - commission);
   const offerBreakdown = myOffers.map(o => {
     const ov = myVouchers.filter(v => v.offerId === o.id);
-    return { id: o.id, title: o.title, sold: ov.length, redeemed: ov.filter(v => v.status === 'redeemed').length, revenue: money(ov.length * o.price) };
+    return { id: o.id, title: o.title, status: o.status, sold: ov.length, redeemed: ov.filter(v => v.status === 'redeemed').length, revenue: money(ov.length * o.price) };
   });
   const recent = myVouchers.map(v => {
     const buyer = data.users.find(u => u.id === v.buyerId);
@@ -292,7 +361,7 @@ app.get('/api/categories', (req, res) => {
 
 /* ---------- Offers (public read) ---------- */
 app.get('/api/offers', (req, res) => {
-  const { category, search } = req.query;
+  const { category, search, minPrice, maxPrice, sort } = req.query;
   let list = data.offers.filter(o => o.status === 'Live');
   if (category && category !== 'All') list = list.filter(o => o.category === category);
   if (search) {
@@ -302,9 +371,17 @@ app.get('/api/offers', (req, res) => {
       return o.title.toLowerCase().includes(s) || (merchant && merchant.name.toLowerCase().includes(s));
     });
   }
+  if (minPrice) list = list.filter(o => o.price >= Number(minPrice));
+  if (maxPrice) list = list.filter(o => o.price <= Number(maxPrice));
+
+  if (sort === 'price_asc') list = [...list].sort((a, b) => a.price - b.price);
+  else if (sort === 'price_desc') list = [...list].sort((a, b) => b.price - a.price);
+  else if (sort === 'newest') list = [...list].sort((a, b) => b.id - a.id);
+  else if (sort === 'popular') list = [...list].sort((a, b) => b.sold - a.sold);
+
   const withMerchant = list.map(o => {
     const m = data.merchants.find(m => m.id === o.merchantId) || {};
-    return { ...o, merchantName: m.name || 'Unknown', merchantInitials: m.initials || '??', merchantLogoUrl: m.logoUrl || null };
+    return { ...o, merchantName: m.name || 'Unknown', merchantInitials: m.initials || '??', merchantLogoUrl: m.logoUrl || null, ...reviewStats(o.id) };
   });
   res.json({ offers: withMerchant });
 });
@@ -313,7 +390,32 @@ app.get('/api/offers/:id', (req, res) => {
   const offer = data.offers.find(o => o.id === Number(req.params.id));
   if (!offer) return res.status(404).json({ error: 'Offer not found.' });
   const merchant = data.merchants.find(m => m.id === offer.merchantId) || {};
-  res.json({ offer: { ...offer, merchantName: merchant.name || 'Unknown', merchantInitials: merchant.initials || '??', merchantLogoUrl: merchant.logoUrl || null } });
+  res.json({ offer: { ...offer, merchantName: merchant.name || 'Unknown', merchantInitials: merchant.initials || '??', merchantLogoUrl: merchant.logoUrl || null, ...reviewStats(offer.id) } });
+});
+
+/* ---------- Reviews ---------- */
+app.get('/api/offers/:id/reviews', (req, res) => {
+  const list = data.reviews.filter(r => r.offerId === Number(req.params.id)).sort((a, b) => b.createdAt - a.createdAt);
+  res.json({ reviews: list, ...reviewStats(Number(req.params.id)) });
+});
+
+app.post('/api/offers/:id/reviews', requireAuth, (req, res) => {
+  const offerId = Number(req.params.id);
+  const offer = data.offers.find(o => o.id === offerId);
+  if (!offer) return res.status(404).json({ error: 'Offer not found.' });
+  const { rating, comment } = req.body;
+  const r = Number(rating);
+  if (!r || r < 1 || r > 5) return res.status(400).json({ error: 'Rating must be between 1 and 5.' });
+  const hasRedeemed = data.vouchers.some(v => v.offerId === offerId && v.ownerId === req.user.id && v.status === 'redeemed');
+  if (!hasRedeemed) return res.status(403).json({ error: 'You can only review offers you have actually redeemed.' });
+  if (data.reviews.some(rv => rv.offerId === offerId && rv.userId === req.user.id)) {
+    return res.status(400).json({ error: "You've already reviewed this offer." });
+  }
+  const id = db.nextId('review');
+  const review = { id, offerId, userId: req.user.id, userName: req.user.name, rating: r, comment: (comment || '').trim().slice(0, 500), createdAt: Date.now() };
+  data.reviews.push(review);
+  db.save();
+  res.json({ review, ...reviewStats(offerId) });
 });
 
 /* ---------- AI offer finder ---------- */
@@ -498,22 +600,59 @@ app.get('/api/admin/stats', requireAdmin, (req, res) => {
 });
 
 app.get('/api/admin/merchants', requireAdmin, (req, res) => {
-  res.json({ merchants: data.merchants.map(m => ({ ...m, passwordHash: undefined })) });
+  res.json({ merchants: data.merchants });
 });
 
 app.post('/api/admin/merchants', requireAdmin, (req, res) => {
   const { name, category, contact, logoUrl } = req.body;
   if (!name || !category || !contact) return res.status(400).json({ error: 'Name, category and contact are required.' });
   const id = db.nextId('merchant');
+  const merchant = { id, name, category, contact, initials: name.slice(0, 2).toUpperCase(), logoUrl: logoUrl || null };
+  data.merchants.push(merchant);
+
   let username = slugify(name);
   let base = username, n = 1;
-  while (data.merchants.some(m => m.username === username)) { username = base + n; n++; }
-  const tempPassword = 'merchant123';
-  const passwordHash = bcrypt.hashSync(tempPassword, 8);
-  const merchant = { id, name, category, contact, initials: name.slice(0, 2).toUpperCase(), username, passwordHash, logoUrl: logoUrl || null };
-  data.merchants.push(merchant);
+  while (data.merchantAccounts.some(a => a.username === username)) { username = base + n; n++; }
+  const tempPassword = generatePassword();
+  const accountId = db.nextId('merchantAccount');
+  const account = { id: accountId, merchantId: id, role: 'manager', location: null, username, passwordHash: bcrypt.hashSync(tempPassword, 8) };
+  data.merchantAccounts.push(account);
+
   db.save();
-  res.json({ merchant: { ...merchant, passwordHash: undefined }, tempPassword });
+  res.json({ merchant, managerUsername: username, tempPassword });
+});
+
+app.get('/api/admin/merchants/:id/accounts', requireAdmin, (req, res) => {
+  const merchantId = Number(req.params.id);
+  const accounts = data.merchantAccounts.filter(a => a.merchantId === merchantId).map(a => ({ ...a, passwordHash: undefined }));
+  res.json({ accounts });
+});
+
+app.post('/api/admin/merchants/:id/accounts', requireAdmin, (req, res) => {
+  const merchantId = Number(req.params.id);
+  const merchant = data.merchants.find(m => m.id === merchantId);
+  if (!merchant) return res.status(404).json({ error: 'Merchant not found.' });
+  const { location } = req.body;
+  if (!location || !location.trim()) return res.status(400).json({ error: 'Enter a branch/location name.' });
+
+  let username = slugify(merchant.name) + '-' + slugify(location);
+  let base = username, n = 1;
+  while (data.merchantAccounts.some(a => a.username === username)) { username = base + n; n++; }
+  const tempPassword = generatePassword();
+  const accountId = db.nextId('merchantAccount');
+  const account = { id: accountId, merchantId, role: 'frontdesk', location: location.trim(), username, passwordHash: bcrypt.hashSync(tempPassword, 8) };
+  data.merchantAccounts.push(account);
+  db.save();
+  res.json({ account: { ...account, passwordHash: undefined }, tempPassword });
+});
+
+app.delete('/api/admin/merchants/:merchantId/accounts/:accountId', requireAdmin, (req, res) => {
+  const account = data.merchantAccounts.find(a => a.id === Number(req.params.accountId) && a.merchantId === Number(req.params.merchantId));
+  if (!account) return res.status(404).json({ error: 'Account not found.' });
+  if (account.role === 'manager') return res.status(400).json({ error: "The manager account can't be deleted here." });
+  data.merchantAccounts = data.merchantAccounts.filter(a => a.id !== account.id);
+  db.save();
+  res.json({ ok: true });
 });
 
 app.patch('/api/admin/merchants/:id/logo', requireAdmin, (req, res) => {
@@ -521,7 +660,7 @@ app.patch('/api/admin/merchants/:id/logo', requireAdmin, (req, res) => {
   if (!merchant) return res.status(404).json({ error: 'Merchant not found.' });
   merchant.logoUrl = req.body.logoUrl || null;
   db.save();
-  res.json({ merchant: { ...merchant, passwordHash: undefined } });
+  res.json({ merchant });
 });
 
 app.post('/api/admin/merchants/:id/logo-upload', requireAdmin, (req, res) => {
@@ -532,7 +671,19 @@ app.post('/api/admin/merchants/:id/logo-upload', requireAdmin, (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
     merchant.logoUrl = '/uploads/' + req.file.filename;
     db.save();
-    res.json({ merchant: { ...merchant, passwordHash: undefined } });
+    res.json({ merchant });
+  });
+});
+
+app.post('/api/admin/offers/:id/image-upload', requireAdmin, (req, res) => {
+  upload.single('image')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || 'Upload failed.' });
+    const offer = data.offers.find(o => o.id === Number(req.params.id));
+    if (!offer) return res.status(404).json({ error: 'Offer not found.' });
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
+    offer.imageUrl = '/uploads/' + req.file.filename;
+    db.save();
+    res.json({ offer });
   });
 });
 
