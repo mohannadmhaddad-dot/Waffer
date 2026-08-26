@@ -35,6 +35,14 @@ async function api(path, opts = {}) {
 }
 
 function esc(s) { return String(s == null ? '' : s).replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 function toast(msg, type) {
   const container = document.getElementById('toastContainer');
@@ -148,7 +156,7 @@ function renderAuthArea() {
 function renderTopAuthPill() {
   const el = document.getElementById('authArea');
   if (currentUser) {
-    el.innerHTML = `<button class="user-pill-btn" onclick="openProfile()">Hi, ${currentUser.name.split(' ')[0]}</button><button onclick="doLogout()">Log out</button>`;
+    el.innerHTML = `<button class="user-pill-btn" onclick="openProfile()">Hi, ${escapeHtml(currentUser.name.split(' ')[0])}</button><button onclick="doLogout()">Log out</button>`;
   } else if (currentMerchant) {
     el.innerHTML = `<button onclick="doMerchantLogout()">Log out</button>`;
   } else {
@@ -344,7 +352,7 @@ async function opCheckCode() {
         <div class="op-result-card error">
           <div class="op-result-eyebrow">Already redeemed</div>
           <div class="op-result-title">${voucher.offerTitle}</div>
-          <div class="op-result-meta">${voucher.buyerName} · redeemed ${fmtDateTime(voucher.redeemedAt)}</div>
+          <div class="op-result-meta">${escapeHtml(voucher.buyerName)} · redeemed ${fmtDateTime(voucher.redeemedAt)}</div>
         </div>`;
       return;
     }
@@ -363,7 +371,7 @@ async function opCheckCode() {
         <div class="op-result-card error">
           <div class="op-result-eyebrow">Expired</div>
           <div class="op-result-title">${voucher.offerTitle}</div>
-          <div class="op-result-meta">${voucher.buyerName} · expired ${voucher.expiryDate}</div>
+          <div class="op-result-meta">${escapeHtml(voucher.buyerName)} · expired ${voucher.expiryDate}</div>
         </div>`;
       return;
     }
@@ -371,7 +379,7 @@ async function opCheckCode() {
       <div class="op-result-card valid">
         <div class="op-result-eyebrow">Valid · not used before</div>
         <div class="op-result-title">${voucher.offerTitle}</div>
-        <div class="op-result-meta">${voucher.buyerName} · bought ${fmtDate(voucher.createdAt)}${voucher.expiryDate ? ' · expires ' + fmtDate(voucher.expiryDate) : ''}</div>
+        <div class="op-result-meta">${escapeHtml(voucher.buyerName)} · bought ${fmtDate(voucher.createdAt)}${voucher.expiryDate ? ' · expires ' + fmtDate(voucher.expiryDate) : ''}</div>
         ${voucher.terms ? `<div class="op-result-terms">${voucher.terms}</div>` : ''}
         <button class="op-redeem-confirm-btn" onclick="opConfirmRedeem('${voucher.code}')">Mark as redeemed</button>
       </div>`;
@@ -463,7 +471,7 @@ async function loadMerchantDashboard() {
       `<tr><td>${o.title}</td><td>${o.status}</td><td>${o.sold}</td><td>${o.redeemed}</td><td>$${o.revenue}</td></tr>`
     ).join('') || `<tr><td colspan="5" class="empty">No offers yet.</td></tr>`;
     document.getElementById('mdRecentTable').innerHTML = d.recent.map(v =>
-      `<tr><td class="voucher-code">${v.code}</td><td>${v.buyerName}</td><td>$${v.price}</td><td><span class="status-pill status-${v.status}">${v.status}</span></td><td>${fmtDateTime(v.createdAt)}</td><td>${fmtDateTime(v.redeemedAt)}</td><td>${v.redeemedByLocation || '—'}</td></tr>`
+      `<tr><td class="voucher-code">${v.code}</td><td>${escapeHtml(v.buyerName)}</td><td>$${v.price}</td><td><span class="status-pill status-${v.status}">${v.status}</span></td><td>${fmtDateTime(v.createdAt)}</td><td>${fmtDateTime(v.redeemedAt)}</td><td>${v.redeemedByLocation || '—'}</td></tr>`
     ).join('') || `<tr><td colspan="7" class="empty">No sales yet.</td></tr>`;
   } catch (e) {
     console.log('dashboard load failed', e.message);
@@ -684,9 +692,9 @@ async function renderOffers() {
         <div class="offer-price-row">
           <span class="price-now">$${o.price}</span>
           <span class="price-was">$${o.original}</span>
-          <span class="discount-badge">${pct}% off</span>
+          <span class="discount-badge">${o.soldOut ? 'Sold out' : pct + '% off'}</span>
         </div>
-        <button class="view-btn" onclick="openOffer(${o.id})">View offer</button>
+        <button class="view-btn" ${o.soldOut ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : `onclick="openOffer(${o.id})"`}>${o.soldOut ? 'Sold out' : 'View offer'}</button>
       </div>
     </div>`;
   }).join('');
@@ -758,8 +766,8 @@ async function loadReviews(offerId) {
     el.innerHTML = reviews.length === 0 ? `<div style="color:var(--ink-faint);font-size:13.5px;">No reviews yet — be the first to redeem and share one.</div>` : reviews.map(r => `
       <div class="tk-review-card">
         <div class="stars">${starString(r.rating)}</div>
-        ${r.comment ? `<p>${r.comment}</p>` : ''}
-        <div class="meta">${r.userName} · ${fmtDate(r.createdAt)}</div>
+        ${r.comment ? `<p>${escapeHtml(r.comment)}</p>` : ''}
+        <div class="meta">${escapeHtml(r.userName)} · ${fmtDate(r.createdAt)}</div>
       </div>
     `).join('');
   } catch (e) { /* ignore */ }
@@ -774,6 +782,7 @@ function changeQty(delta) {
 function startPurchase() {
   if (!currentUser) { closeModal('offerModal'); openModal('authModal'); return; }
   closeModal('offerModal');
+  window.__purchaseIdempotencyKey = crypto.randomUUID ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(36).slice(2));
   const total = (currentOffer.price * purchaseQty).toFixed(2).replace(/\.00$/, '');
   document.getElementById('purchaseSummary').innerHTML = `
     <div class="tk-line-item">
@@ -783,6 +792,7 @@ function startPurchase() {
     </div>`;
   document.getElementById('purchaseTotalFig').textContent = '$' + total;
   document.getElementById('purchasePayBtn').textContent = 'Pay $' + total;
+  document.getElementById('purchasePayBtn').disabled = false;
   openModal('purchaseModal');
 }
 
@@ -836,7 +846,7 @@ function updateGiftPreview() {
   panel.style.display = 'block';
   panel.innerHTML = `
     <div class="label">They'll see</div>
-    <div class="headline">${currentUser ? currentUser.name.split(' ')[0] : 'You'} sent them ${currentOffer.title}</div>
+    <div class="headline">${currentUser ? escapeHtml(currentUser.name.split(' ')[0]) : 'You'} sent them ${escapeHtml(currentOffer.title)}</div>
     ${message ? `<div style="font-size:13px;color:rgba(255,255,255,0.85);margin-top:8px;font-style:italic;">"${message}"</div>` : ''}
     <div class="rule"></div>
     <div class="note">If they don't have an account yet, it sits as <strong>Pending claim</strong> until they sign up — cancel any time before then.</div>
@@ -844,8 +854,11 @@ function updateGiftPreview() {
 }
 
 async function completePurchase() {
+  const payBtn = document.getElementById('purchasePayBtn');
+  if (payBtn.disabled) return;
+  payBtn.disabled = true;
   try {
-    const { vouchers, total } = await api('/api/vouchers/purchase', { method: 'POST', body: { offerId: currentOffer.id, quantity: purchaseQty } });
+    const { vouchers, total } = await api('/api/vouchers/purchase', { method: 'POST', body: { offerId: currentOffer.id, quantity: purchaseQty, idempotencyKey: window.__purchaseIdempotencyKey } });
     closeModal('purchaseModal');
     renderOffers();
     document.getElementById('purchaseSuccessTitle').textContent = vouchers.length > 1 ? `${vouchers.length} tickets, in your wallet` : 'One ticket, in your wallet';
@@ -855,6 +868,7 @@ async function completePurchase() {
     openModal('purchaseSuccessModal');
   } catch (e) {
     toast(e.message, 'error');
+    payBtn.disabled = false;
   }
 }
 
@@ -911,7 +925,7 @@ async function renderWallet() {
     <div class="tk-ticket-card">
       <div class="tk-ticket-top">
         <div class="tk-avatar">${(v.merchantName || '??').slice(0, 2).toUpperCase()}</div>
-        <div class="info"><div class="t">${v.offerTitle}</div><div class="m">To ${v.giftedTo || v.recipientEmail || v.recipientPhone || 'pending'} · $${v.price}</div></div>
+        <div class="info"><div class="t">${v.offerTitle}</div><div class="m">To ${escapeHtml(v.giftedTo || v.recipientEmail || v.recipientPhone || 'pending')} · $${v.price}</div></div>
         <span class="tk-state-badge ${v.status === 'pending-claim' ? 'tk-state-expiring' : 'tk-state-ready'}">${v.status === 'pending-claim' ? 'awaiting sign-up' : v.status}</span>
       </div>
       <div class="tk-ticket-bottom"><span class="code">${v.code}</span></div>
@@ -1137,6 +1151,14 @@ function openEditOffer(id) {
   document.getElementById('eoPrice').value = o.price;
   document.getElementById('eoExpiry').value = o.expiryDate || '';
   document.getElementById('eoTerms').value = o.terms;
+  document.getElementById('eoStartDate').value = o.startDate || '';
+  document.getElementById('eoMaxInventory').value = o.maxInventory || '';
+  document.getElementById('eoPerCustomerLimit').value = o.perCustomerLimit || '';
+  document.querySelectorAll('.eo-redemption-day').forEach(el => {
+    el.checked = Array.isArray(o.redemptionDays) && o.redemptionDays.includes(Number(el.value));
+  });
+  document.getElementById('eoHoursFrom').value = (o.redemptionHours && o.redemptionHours.from) || '';
+  document.getElementById('eoHoursTo').value = (o.redemptionHours && o.redemptionHours.to) || '';
   clearNotice('editOfferNotice');
   openModal('editOfferModal');
 }
@@ -1150,7 +1172,13 @@ async function saveOfferEdit() {
     original: document.getElementById('eoOriginal').value,
     price: document.getElementById('eoPrice').value,
     expiryDate: document.getElementById('eoExpiry').value,
-    terms: document.getElementById('eoTerms').value.trim()
+    terms: document.getElementById('eoTerms').value.trim(),
+    startDate: document.getElementById('eoStartDate').value,
+    maxInventory: document.getElementById('eoMaxInventory').value,
+    perCustomerLimit: document.getElementById('eoPerCustomerLimit').value,
+    redemptionDays: Array.from(document.querySelectorAll('.eo-redemption-day:checked')).map(el => Number(el.value)),
+    redemptionHoursFrom: document.getElementById('eoHoursFrom').value,
+    redemptionHoursTo: document.getElementById('eoHoursTo').value
   };
   try {
     await api(`/api/admin/offers/${id}`, { method: 'PATCH', body });
@@ -1176,7 +1204,7 @@ async function openOfferDetail(id) {
       </div>
       <p class="note" style="margin-bottom:14px;">Merchant payout: <strong>$${d.payout}</strong></p>
       <table><thead><tr><th>Code</th><th>Buyer</th><th>Status</th><th>Purchased</th><th>Redeemed</th><th>Branch</th></tr></thead><tbody>
-        ${d.vouchers.map(v => `<tr><td class="voucher-code">${v.code}</td><td>${v.buyerName}${v.isGift ? ' (gift)' : ''}</td><td><span class="status-pill status-${v.status}">${v.status}</span></td><td>${fmtDateTime(v.createdAt)}</td><td>${fmtDateTime(v.redeemedAt)}</td><td>${v.redeemedByLocation || '—'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">No sales yet.</td></tr>'}
+        ${d.vouchers.map(v => `<tr><td class="voucher-code">${v.code}</td><td>${escapeHtml(v.buyerName)}${v.isGift ? ' (gift)' : ''}</td><td><span class="status-pill status-${v.status}">${v.status}</span></td><td>${fmtDateTime(v.createdAt)}</td><td>${fmtDateTime(v.redeemedAt)}</td><td>${v.redeemedByLocation || '—'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">No sales yet.</td></tr>'}
       </tbody></table>
     `;
     openModal('offerDetailModal');
@@ -1444,9 +1472,16 @@ async function createOfferAdmin() {
   const price = document.getElementById('noPrice').value;
   const expiryDate = document.getElementById('noExpiry').value;
   const terms = document.getElementById('noTerms').value.trim();
+  const startDate = document.getElementById('noStartDate').value;
+  const maxInventory = document.getElementById('noMaxInventory').value;
+  const perCustomerLimit = document.getElementById('noPerCustomerLimit').value;
+  const redemptionDays = Array.from(document.querySelectorAll('.no-redemption-day:checked')).map(el => Number(el.value));
+  const redemptionHoursFrom = document.getElementById('noHoursFrom').value;
+  const redemptionHoursTo = document.getElementById('noHoursTo').value;
   try {
-    await api('/api/admin/offers', { method: 'POST', body: { merchantId, title, original, price, expiryDate, terms } });
-    ['noTitle', 'noOriginal', 'noPrice', 'noExpiry', 'noTerms'].forEach(id => document.getElementById(id).value = '');
+    await api('/api/admin/offers', { method: 'POST', body: { merchantId, title, original, price, expiryDate, terms, startDate, maxInventory, perCustomerLimit, redemptionDays, redemptionHoursFrom, redemptionHoursTo } });
+    ['noTitle', 'noOriginal', 'noPrice', 'noExpiry', 'noTerms', 'noStartDate', 'noMaxInventory', 'noPerCustomerLimit', 'noHoursFrom', 'noHoursTo'].forEach(id => document.getElementById(id).value = '');
+    document.querySelectorAll('.no-redemption-day').forEach(el => el.checked = false);
     closeModal('newOfferModal');
     renderAdmin();
     renderOffers();

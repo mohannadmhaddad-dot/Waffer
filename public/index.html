@@ -419,6 +419,29 @@
     <div class="two-col"><div class="field"><label>Original price (USD)</label><input id="noOriginal" type="number" /></div><div class="field"><label>Voucher price (USD)</label><input id="noPrice" type="number" /></div></div>
     <div class="field"><label>Valid until</label><input id="noExpiry" type="date" /></div>
     <div class="field"><label>Terms & conditions</label><textarea id="noTerms"></textarea></div>
+    <hr class="modal-divider" />
+    <h3 style="font-size:14px;">Rules (all optional)</h3>
+    <div class="two-col">
+      <div class="field"><label>Starts on</label><input id="noStartDate" type="date" /></div>
+      <div class="field"><label>Max vouchers total</label><input id="noMaxInventory" type="number" placeholder="unlimited" /></div>
+    </div>
+    <div class="field"><label>Max per customer</label><input id="noPerCustomerLimit" type="number" placeholder="unlimited" style="max-width:200px;" /></div>
+    <div class="field"><label>Redemption days</label>
+      <div class="btn-row" style="flex-wrap:wrap;gap:6px;">
+        <label class="note"><input type="checkbox" class="no-redemption-day" value="0" /> Sun</label>
+        <label class="note"><input type="checkbox" class="no-redemption-day" value="1" /> Mon</label>
+        <label class="note"><input type="checkbox" class="no-redemption-day" value="2" /> Tue</label>
+        <label class="note"><input type="checkbox" class="no-redemption-day" value="3" /> Wed</label>
+        <label class="note"><input type="checkbox" class="no-redemption-day" value="4" /> Thu</label>
+        <label class="note"><input type="checkbox" class="no-redemption-day" value="5" /> Fri</label>
+        <label class="note"><input type="checkbox" class="no-redemption-day" value="6" /> Sat</label>
+      </div>
+      <p class="note" style="margin-top:4px;">Leave all unchecked for every day.</p>
+    </div>
+    <div class="two-col">
+      <div class="field"><label>Redemption hours from</label><input id="noHoursFrom" type="time" /></div>
+      <div class="field"><label>Redemption hours to</label><input id="noHoursTo" type="time" /></div>
+    </div>
     <div class="inline-notice" id="offerNotice"></div>
     <button class="btn btn-primary btn-block" onclick="createOfferAdmin()">Publish offer</button>
   </div>
@@ -435,6 +458,29 @@
     <div class="two-col"><div class="field"><label>Original price (USD)</label><input id="eoOriginal" type="number" /></div><div class="field"><label>Voucher price (USD)</label><input id="eoPrice" type="number" /></div></div>
     <div class="field"><label>Valid until</label><input id="eoExpiry" type="date" /></div>
     <div class="field"><label>Terms & conditions</label><textarea id="eoTerms"></textarea></div>
+    <hr class="modal-divider" />
+    <h3 style="font-size:14px;">Rules (all optional)</h3>
+    <div class="two-col">
+      <div class="field"><label>Starts on</label><input id="eoStartDate" type="date" /></div>
+      <div class="field"><label>Max vouchers total</label><input id="eoMaxInventory" type="number" placeholder="unlimited" /></div>
+    </div>
+    <div class="field"><label>Max per customer</label><input id="eoPerCustomerLimit" type="number" placeholder="unlimited" style="max-width:200px;" /></div>
+    <div class="field"><label>Redemption days</label>
+      <div class="btn-row" style="flex-wrap:wrap;gap:6px;">
+        <label class="note"><input type="checkbox" class="eo-redemption-day" value="0" /> Sun</label>
+        <label class="note"><input type="checkbox" class="eo-redemption-day" value="1" /> Mon</label>
+        <label class="note"><input type="checkbox" class="eo-redemption-day" value="2" /> Tue</label>
+        <label class="note"><input type="checkbox" class="eo-redemption-day" value="3" /> Wed</label>
+        <label class="note"><input type="checkbox" class="eo-redemption-day" value="4" /> Thu</label>
+        <label class="note"><input type="checkbox" class="eo-redemption-day" value="5" /> Fri</label>
+        <label class="note"><input type="checkbox" class="eo-redemption-day" value="6" /> Sat</label>
+      </div>
+      <p class="note" style="margin-top:4px;">Leave all unchecked for every day.</p>
+    </div>
+    <div class="two-col">
+      <div class="field"><label>Redemption hours from</label><input id="eoHoursFrom" type="time" /></div>
+      <div class="field"><label>Redemption hours to</label><input id="eoHoursTo" type="time" /></div>
+    </div>
     <div class="inline-notice" id="editOfferNotice"></div>
     <button class="btn btn-primary btn-block" onclick="saveOfferEdit()">Save changes</button>
   </div>
