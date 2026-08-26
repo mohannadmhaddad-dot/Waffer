@@ -1,5 +1,6 @@
 const express = require('express');
 const session = require('express-session');
+const rateLimit = require('express-rate-limit');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const path = require('path');
@@ -33,6 +34,7 @@ const upload = multer({
   }
 });
 
+app.set('trust proxy', 1);
 app.use(express.json());
 app.use(session({
   secret: process.env.SESSION_SECRET || 'waffer-dev-secret-change-in-production',
@@ -41,6 +43,19 @@ app.use(session({
   cookie: { maxAge: 1000 * 60 * 60 * 24 * 7 }
 }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 8, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Too many login attempts. Please wait a few minutes and try again.' }
+});
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, max: 6, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Too many accounts created from this device recently. Please try again later.' }
+});
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Too many reset requests. Please try again later.' }
+});
 
 let data;
 
@@ -180,7 +195,7 @@ function originOf(req) {
 }
 
 /* ---------- Customer auth ---------- */
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', registerLimiter, (req, res) => {
   const { name, email, phone, countryCode, password, gender, birthday } = req.body;
   const fullPhone = phone ? `${countryCode || ''}${phone}`.trim() : '';
   if (!name || !email || !password || !phone) {
@@ -224,7 +239,7 @@ app.post('/api/auth/register', (req, res) => {
   res.json({ user: publicUser(user), claimedGifts: claimedCount });
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', authLimiter, (req, res) => {
   const { email, password } = req.body;
   const user = data.users.find(u => u.email.toLowerCase() === (email || '').toLowerCase());
   if (!user || !bcrypt.compareSync(password || '', user.passwordHash)) {
@@ -264,7 +279,7 @@ app.post('/api/auth/change-password', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/auth/forgot-password', async (req, res) => {
+app.post('/api/auth/forgot-password', forgotPasswordLimiter, async (req, res) => {
   const { email } = req.body;
   const user = data.users.find(u => u.email.toLowerCase() === (email || '').toLowerCase());
   if (user) {
@@ -314,7 +329,7 @@ app.post('/api/auth/resend-verification', requireAuth, async (req, res) => {
 });
 
 /* ---------- Merchant auth ---------- */
-app.post('/api/merchant/login', (req, res) => {
+app.post('/api/merchant/login', authLimiter, (req, res) => {
   const { username, password } = req.body;
   const account = data.merchantAccounts.find(a => a.username && a.username.toLowerCase() === (username || '').toLowerCase());
   if (!account || !bcrypt.compareSync(password || '', account.passwordHash)) {
@@ -883,9 +898,19 @@ app.post('/api/admin/offers', requireAdmin, (req, res) => {
     id, merchantId: merchant.id, title, category: category || merchant.category,
     original: Number(original) || Number(price), price: Number(price),
     sold: 0, status: 'Live', terms: terms || 'Terms to be confirmed with merchant.',
-    expiryDate: expiryDate || null
+    expiryDate: expiryDate || null, featured: false
   };
   data.offers.push(offer);
+  db.save();
+  res.json({ offer });
+});
+
+app.patch('/api/admin/offers/:id/feature', requireAdmin, (req, res) => {
+  const offer = data.offers.find(o => o.id === Number(req.params.id));
+  if (!offer) return res.status(404).json({ error: 'Offer not found.' });
+  const makeFeatured = !offer.featured;
+  data.offers.forEach(o => { o.featured = false; });
+  offer.featured = makeFeatured;
   db.save();
   res.json({ offer });
 });
