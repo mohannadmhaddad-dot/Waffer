@@ -1,6 +1,7 @@
 const express = require('express');
 const session = require('express-session');
 const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const path = require('path');
@@ -35,14 +36,49 @@ const upload = multer({
 });
 
 app.set('trust proxy', 1);
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      // 'unsafe-inline' is required here because the current frontend uses inline onclick=""
+      // handlers and inline style="" attributes throughout — rewriting every handler to
+      // addEventListener is a real, separate frontend refactor, not a quick header change.
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+      scriptSrcAttr: ["'unsafe-inline'"], // required: the app uses onclick="" attributes throughout
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      imgSrc: ["'self'", "data:", "https:"], // merchants can paste an external logo URL
+      connectSrc: ["'self'"]
+    }
+  },
+  crossOriginEmbedderPolicy: false
+}));
 app.use(express.json());
 app.use(session({
   secret: process.env.SESSION_SECRET || 'waffer-dev-secret-change-in-production',
   resave: false,
   saveUninitialized: false,
-  cookie: { maxAge: 1000 * 60 * 60 * 24 * 7 }
+  cookie: {
+    maxAge: 1000 * 60 * 60 * 24 * 7,
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: !!process.env.RENDER
+  }
 }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+function csrfProtection(req, res, next) {
+  if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) {
+    const contentType = req.get('Content-Type') || '';
+    const isJson = contentType.includes('application/json');
+    const isMultipart = contentType.includes('multipart/form-data');
+    if (!isJson && !isMultipart) {
+      return res.status(403).json({ error: 'Request rejected: invalid content type.' });
+    }
+  }
+  next();
+}
+app.use(csrfProtection);
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, max: 8, standardHeaders: true, legacyHeaders: false,
@@ -79,6 +115,94 @@ function generatePassword() {
 
 function money(n) {
   return Math.round(n * 100) / 100;
+}
+
+/* Validates an offer purchase against its own rules. buyerId is always the paying
+   customer, even for gifts, since per-customer limits apply to who is buying. */
+function validateOfferPurchase(offer, buyerId, qty) {
+  if (!offer || offer.status !== 'Live') return 'Offer is not available.';
+  if (offer.startDate && new Date(offer.startDate).getTime() > Date.now()) return 'This offer is not available yet.';
+  if (typeof offer.maxInventory === 'number' && offer.sold + qty > offer.maxInventory) return 'This offer is sold out.';
+  if (typeof offer.perCustomerLimit === 'number') {
+    const alreadyBought = data.vouchers.filter(v => v.offerId === offer.id && v.buyerId === buyerId).length;
+    if (alreadyBought + qty > offer.perCustomerLimit) {
+      return `You can buy at most ${offer.perCustomerLimit} of this offer.`;
+    }
+  }
+  return null;
+}
+
+function validateRedemptionWindow(offer) {
+  const now = new Date();
+  if (Array.isArray(offer.redemptionDays) && offer.redemptionDays.length) {
+    if (!offer.redemptionDays.includes(now.getDay())) return 'This offer cannot be redeemed today.';
+  }
+  if (offer.redemptionHours && offer.redemptionHours.from && offer.redemptionHours.to) {
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const [fh, fm] = offer.redemptionHours.from.split(':').map(Number);
+    const [th, tm] = offer.redemptionHours.to.split(':').map(Number);
+    const fromMinutes = fh * 60 + fm, toMinutes = th * 60 + tm;
+    if (nowMinutes < fromMinutes || nowMinutes > toMinutes) {
+      return `This offer can only be redeemed between ${offer.redemptionHours.from} and ${offer.redemptionHours.to}.`;
+    }
+  }
+  return null;
+}
+
+/* ---------- Payment provider abstraction ----------
+   Keeps checkout/voucher logic independent of which payment provider is active.
+   Today this is always SimulatedPaymentProvider. Once the Whish contract and API
+   details are finalized, a WhishPaymentProvider implementing the same interface
+   can be swapped in below without touching checkout, voucher, or accounting logic. */
+class PaymentProvider {
+  async createPayment({ amount, currency, customerId, metadata }) { throw new Error('Not implemented'); }
+  async verifyPayment(transactionId) { throw new Error('Not implemented'); }
+  async refund(transactionId, amount) { throw new Error('Not implemented'); }
+  async getStatus(transactionId) { throw new Error('Not implemented'); }
+}
+
+class SimulatedPaymentProvider extends PaymentProvider {
+  async createPayment({ amount, currency, customerId, metadata }) {
+    const transactionId = 'SIM-' + crypto.randomBytes(8).toString('hex').toUpperCase();
+    return { success: true, transactionId, status: 'succeeded', amount, currency: currency || 'USD' };
+  }
+  async verifyPayment(transactionId) {
+    return { verified: typeof transactionId === 'string' && transactionId.startsWith('SIM-'), status: 'succeeded' };
+  }
+  async refund(transactionId, amount) {
+    return { success: true, refundId: 'REFUND-' + crypto.randomBytes(6).toString('hex').toUpperCase(), amount };
+  }
+  async getStatus(transactionId) {
+    return { status: 'succeeded' };
+  }
+}
+
+const paymentProvider = new SimulatedPaymentProvider();
+
+/* ---------- Idempotency (prevents duplicate orders on client retry) ----------
+   In-memory is acceptable at current single-instance scale, same reasoning as the
+   session store. Would move to Redis alongside the session store if scaling out. */
+const idempotencyCache = new Map();
+const IDEMPOTENCY_TTL = 5 * 60 * 1000;
+
+function checkIdempotency(userId, key) {
+  if (!key) return null;
+  const cached = idempotencyCache.get(`${userId}:${key}`);
+  if (cached && Date.now() - cached.timestamp < IDEMPOTENCY_TTL) return cached.result;
+  return null;
+}
+function saveIdempotency(userId, key, result) {
+  if (!key) return;
+  idempotencyCache.set(`${userId}:${key}`, { result, timestamp: Date.now() });
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function reviewStats(offerId) {
@@ -289,7 +413,7 @@ app.post('/api/auth/forgot-password', forgotPasswordLimiter, async (req, res) =>
     db.save();
     const link = `${originOf(req)}/?resetToken=${token}`;
     await sendEmail(user.email, 'Reset your Waffer password',
-      emailTemplate('Reset your password', `<p>Hi ${user.name},</p><p>We got a request to reset your Waffer password. This link expires in 1 hour.</p>${emailButton('Reset my password', link)}<p style="color:#64748B;font-size:12.5px;">If you didn't request this, you can safely ignore this email.</p>`, originOf(req)));
+      emailTemplate('Reset your password', `<p>Hi ${escapeHtml(user.name)},</p><p>We got a request to reset your Waffer password. This link expires in 1 hour.</p>${emailButton('Reset my password', link)}<p style="color:#64748B;font-size:12.5px;">If you didn't request this, you can safely ignore this email.</p>`, originOf(req)));
   }
   res.json({ ok: true, message: 'If that email is registered, a reset link has been sent.' });
 });
@@ -324,7 +448,7 @@ app.post('/api/auth/resend-verification', requireAuth, async (req, res) => {
   db.save();
   const verifyLink = `${originOf(req)}/?verifyToken=${token}`;
   await sendEmail(req.user.email, 'Verify your Waffer email',
-    emailTemplate('Confirm your email', `<p>Hi ${req.user.name},</p><p>Please confirm your email address to get full access to your Waffer account.</p>${emailButton('Verify my email', verifyLink)}`, originOf(req)));
+    emailTemplate('Confirm your email', `<p>Hi ${escapeHtml(req.user.name)},</p><p>Please confirm your email address to get full access to your Waffer account.</p>${emailButton('Verify my email', verifyLink)}`, originOf(req)));
   res.json({ ok: true, message: 'Verification email sent.' });
 });
 
@@ -428,7 +552,8 @@ app.get('/api/categories', (req, res) => {
 /* ---------- Offers (public read) ---------- */
 app.get('/api/offers', (req, res) => {
   const { category, search, minPrice, maxPrice, sort } = req.query;
-  let list = data.offers.filter(o => o.status === 'Live');
+  const now = Date.now();
+  let list = data.offers.filter(o => o.status === 'Live' && (!o.startDate || new Date(o.startDate).getTime() <= now));
   if (category && category !== 'All') list = list.filter(o => o.category === category);
   if (search) {
     const s = search.toLowerCase();
@@ -447,7 +572,8 @@ app.get('/api/offers', (req, res) => {
 
   const withMerchant = list.map(o => {
     const m = data.merchants.find(m => m.id === o.merchantId) || {};
-    return { ...o, merchantName: m.name || 'Unknown', merchantInitials: m.initials || '??', merchantLogoUrl: m.logoUrl || null, ...reviewStats(o.id) };
+    const soldOut = typeof o.maxInventory === 'number' && o.sold >= o.maxInventory;
+    return { ...o, merchantName: m.name || 'Unknown', merchantInitials: m.initials || '??', merchantLogoUrl: m.logoUrl || null, soldOut, ...reviewStats(o.id) };
   });
   res.json({ offers: withMerchant });
 });
@@ -524,13 +650,27 @@ app.post('/api/ai/recommend', async (req, res) => {
 });
 
 /* ---------- Vouchers ---------- */
-app.post('/api/vouchers/purchase', requireAuth, (req, res) => {
-  const { offerId, quantity } = req.body;
+app.post('/api/vouchers/purchase', requireAuth, async (req, res) => {
+  const { offerId, quantity, idempotencyKey } = req.body;
+  const cached = checkIdempotency(req.user.id, idempotencyKey);
+  if (cached) return res.json(cached);
+
   const qty = Math.max(1, Math.min(20, Number(quantity) || 1));
   const offer = data.offers.find(o => o.id === Number(offerId));
-  if (!offer || offer.status !== 'Live') return res.status(400).json({ error: 'Offer is not available.' });
+  const validationError = validateOfferPurchase(offer, req.user.id, qty);
+  if (validationError) return res.status(400).json({ error: validationError });
   const merchant = data.merchants.find(m => m.id === offer.merchantId) || {};
   const lockedCommissionRate = commissionRateFor(merchant);
+  const totalAmount = money(offer.price * qty);
+
+  const paymentResult = await paymentProvider.createPayment({
+    amount: totalAmount, currency: 'USD', customerId: req.user.id,
+    metadata: { offerId: offer.id, quantity: qty }
+  });
+  if (!paymentResult.success) {
+    return res.status(402).json({ error: 'Payment failed. Please try again.' });
+  }
+
   const discountPct = Math.round((1 - offer.price / offer.original) * 100);
   const vouchers = [];
   for (let i = 0; i < qty; i++) {
@@ -540,7 +680,7 @@ app.post('/api/vouchers/purchase', requireAuth, (req, res) => {
       merchantName: merchant.name, discountPct, expiryDate: offer.expiryDate || null,
       ownerId: req.user.id, buyerId: req.user.id, status: 'active',
       giftedTo: null, recipientEmail: null, recipientPhone: null, createdAt: Date.now(), redeemedAt: null,
-      commissionRate: lockedCommissionRate
+      commissionRate: lockedCommissionRate, paymentTransactionId: paymentResult.transactionId
     };
     data.vouchers.push(voucher);
     vouchers.push(voucher);
@@ -551,11 +691,11 @@ app.post('/api/vouchers/purchase', requireAuth, (req, res) => {
   const codeList = vouchers.map(v => `<div style="background:#FAFAFA;border-radius:8px;padding:10px 14px;margin-bottom:8px;font-family:'Courier New',monospace;font-weight:700;font-size:15px;text-align:center;letter-spacing:1px;color:#1E293B;">${v.code}</div>`).join('');
   sendEmail(req.user.email, 'Your Waffer purchase confirmation',
     emailTemplate('Payment confirmed', `
-      <p>Hi ${req.user.name},</p>
+      <p>Hi ${escapeHtml(req.user.name)},</p>
       <p>Thanks for your purchase! Here's your receipt:</p>
       <table style="width:100%;margin:16px 0;border-collapse:collapse;">
-        <tr><td style="padding:6px 0;color:#64748B;">Offer</td><td style="padding:6px 0;text-align:right;font-weight:700;">${offer.title}</td></tr>
-        <tr><td style="padding:6px 0;color:#64748B;">Merchant</td><td style="padding:6px 0;text-align:right;">${merchant.name || 'the merchant'}</td></tr>
+        <tr><td style="padding:6px 0;color:#64748B;">Offer</td><td style="padding:6px 0;text-align:right;font-weight:700;">${escapeHtml(offer.title)}</td></tr>
+        <tr><td style="padding:6px 0;color:#64748B;">Merchant</td><td style="padding:6px 0;text-align:right;">${escapeHtml(merchant.name) || 'the merchant'}</td></tr>
         <tr><td style="padding:6px 0;color:#64748B;">Quantity</td><td style="padding:6px 0;text-align:right;">${qty} &times; $${offer.price}</td></tr>
         <tr><td style="padding:8px 0;color:#1E293B;font-weight:700;border-top:1px solid #E5E7EB;">Total</td><td style="padding:8px 0;text-align:right;font-weight:800;border-top:1px solid #E5E7EB;">$${money(offer.price * qty)}</td></tr>
       </table>
@@ -564,13 +704,16 @@ app.post('/api/vouchers/purchase', requireAuth, (req, res) => {
       <p style="color:#64748B;font-size:12.5px;">Valid until: ${offer.expiryDate || 'no expiry set'}. Find these anytime in your Waffer wallet.</p>
     `, originOf(req)));
 
-  res.json({ vouchers, total: money(offer.price * qty) });
+  const responseBody = { vouchers, total: totalAmount };
+  saveIdempotency(req.user.id, idempotencyKey, responseBody);
+  res.json(responseBody);
 });
 
 app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
   const { offerId, recipientEmail, recipientPhone, message } = req.body;
   const offer = data.offers.find(o => o.id === Number(offerId));
-  if (!offer || offer.status !== 'Live') return res.status(400).json({ error: 'Offer is not available.' });
+  const validationError = validateOfferPurchase(offer, req.user.id, 1);
+  if (validationError) return res.status(400).json({ error: validationError });
   const email = (recipientEmail || '').trim().toLowerCase();
   const phone = (recipientPhone || '').trim().toLowerCase();
   if (!email && !phone) return res.status(400).json({ error: "Enter the recipient's email or phone number." });
@@ -605,21 +748,21 @@ app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
   if (recipient && recipient.email) {
     sendEmail(recipient.email, 'You received a Waffer gift!',
       emailTemplate('You got a gift! 🎁', `
-        <p>Hi ${recipient.name},</p>
-        <p><strong>${req.user.name}</strong> sent you a voucher:</p>
-        <p style="font-size:16px;font-weight:700;margin:14px 0 4px;">${offer.title}</p>
-        <p style="color:#64748B;margin-top:0;">from ${voucher.merchantName}</p>
-        ${voucher.giftMessage ? `<div style="background:#FAFAFA;border-radius:8px;padding:12px 16px;margin:14px 0;font-style:italic;color:#1E293B;">"${voucher.giftMessage}"</div>` : ''}
+        <p>Hi ${escapeHtml(recipient.name)},</p>
+        <p><strong>${escapeHtml(req.user.name)}</strong> sent you a voucher:</p>
+        <p style="font-size:16px;font-weight:700;margin:14px 0 4px;">${escapeHtml(offer.title)}</p>
+        <p style="color:#64748B;margin-top:0;">from ${escapeHtml(voucher.merchantName)}</p>
+        ${voucher.giftMessage ? `<div style="background:#FAFAFA;border-radius:8px;padding:12px 16px;margin:14px 0;font-style:italic;color:#1E293B;">"${escapeHtml(voucher.giftMessage)}"</div>` : ''}
         <div style="background:#FAFAFA;border-radius:8px;padding:10px 14px;margin:14px 0;font-family:'Courier New',monospace;font-weight:700;font-size:15px;text-align:center;letter-spacing:1px;">${code}</div>
         <p style="color:#64748B;font-size:12.5px;">Find it anytime in your Waffer wallet.</p>
       `, originOf(req)));
   } else if (email) {
     sendEmail(email, "You've received a gift on Waffer!",
       emailTemplate('Someone sent you a gift! 🎁', `
-        <p><strong>${req.user.name}</strong> sent you a voucher:</p>
-        <p style="font-size:16px;font-weight:700;margin:14px 0 4px;">${offer.title}</p>
-        <p style="color:#64748B;margin-top:0;">from ${voucher.merchantName}</p>
-        ${voucher.giftMessage ? `<div style="background:#FAFAFA;border-radius:8px;padding:12px 16px;margin:14px 0;font-style:italic;color:#1E293B;">"${voucher.giftMessage}"</div>` : ''}
+        <p><strong>${escapeHtml(req.user.name)}</strong> sent you a voucher:</p>
+        <p style="font-size:16px;font-weight:700;margin:14px 0 4px;">${escapeHtml(offer.title)}</p>
+        <p style="color:#64748B;margin-top:0;">from ${escapeHtml(voucher.merchantName)}</p>
+        ${voucher.giftMessage ? `<div style="background:#FAFAFA;border-radius:8px;padding:12px 16px;margin:14px 0;font-style:italic;color:#1E293B;">"${escapeHtml(voucher.giftMessage)}"</div>` : ''}
         <p>Create a free Waffer account using this email address to claim it:</p>
         ${emailButton('Create my account', `${originOf(req)}/?claimEmail=${encodeURIComponent(email)}`)}
       `, originOf(req)));
@@ -660,6 +803,8 @@ app.post('/api/vouchers/redeem', requireMerchant, (req, res) => {
   }
   if (voucher.status === 'redeemed') return res.status(400).json({ error: 'This voucher has already been redeemed.' });
   if (voucher.status === 'pending-claim') return res.status(400).json({ error: 'This voucher has not been claimed by its recipient yet.' });
+  const windowError = validateRedemptionWindow(offer);
+  if (windowError) return res.status(400).json({ error: windowError });
   voucher.status = 'redeemed';
   voucher.redeemedAt = Date.now();
   voucher.redeemedByLocation = req.merchantAccount.location || 'Main';
@@ -672,7 +817,7 @@ app.post('/api/vouchers/redeem', requireMerchant, (req, res) => {
     if (owner && owner.email && !alreadyReviewed) {
       sendEmail(owner.email, `How was ${voucher.offerTitle}?`,
         emailTemplate('Tell us how it went', `
-          <p>Hi ${owner.name},</p>
+          <p>Hi ${escapeHtml(owner.name)},</p>
           <p>You just redeemed <strong>${voucher.offerTitle}</strong> from ${voucher.merchantName}. We'd love to hear how it went!</p>
           ${emailButton('Leave a review', originOf(req))}
           <p style="color:#64748B;font-size:12.5px;">You can rate it anytime from "My Vouchers" in your Waffer account.</p>
@@ -889,7 +1034,7 @@ app.get('/api/admin/offers/:id/detail', requireAdmin, (req, res) => {
 });
 
 app.post('/api/admin/offers', requireAdmin, (req, res) => {
-  const { merchantId, title, category, original, price, terms, expiryDate } = req.body;
+  const { merchantId, title, category, original, price, terms, expiryDate, startDate, maxInventory, perCustomerLimit, redemptionDays, redemptionHoursFrom, redemptionHoursTo } = req.body;
   if (!merchantId || !title || !price) return res.status(400).json({ error: 'Merchant, title and price are required.' });
   const merchant = data.merchants.find(m => m.id === Number(merchantId));
   if (!merchant) return res.status(400).json({ error: 'Merchant not found.' });
@@ -898,7 +1043,12 @@ app.post('/api/admin/offers', requireAdmin, (req, res) => {
     id, merchantId: merchant.id, title, category: category || merchant.category,
     original: Number(original) || Number(price), price: Number(price),
     sold: 0, status: 'Live', terms: terms || 'Terms to be confirmed with merchant.',
-    expiryDate: expiryDate || null, featured: false
+    expiryDate: expiryDate || null, featured: false,
+    startDate: startDate || null,
+    maxInventory: maxInventory ? Number(maxInventory) : null,
+    perCustomerLimit: perCustomerLimit ? Number(perCustomerLimit) : null,
+    redemptionDays: Array.isArray(redemptionDays) && redemptionDays.length ? redemptionDays.map(Number) : null,
+    redemptionHours: (redemptionHoursFrom && redemptionHoursTo) ? { from: redemptionHoursFrom, to: redemptionHoursTo } : null
   };
   data.offers.push(offer);
   db.save();
@@ -918,13 +1068,20 @@ app.patch('/api/admin/offers/:id/feature', requireAdmin, (req, res) => {
 app.patch('/api/admin/offers/:id', requireAdmin, (req, res) => {
   const offer = data.offers.find(o => o.id === Number(req.params.id));
   if (!offer) return res.status(404).json({ error: 'Offer not found.' });
-  const { title, category, original, price, terms, expiryDate } = req.body;
+  const { title, category, original, price, terms, expiryDate, startDate, maxInventory, perCustomerLimit, redemptionDays, redemptionHoursFrom, redemptionHoursTo } = req.body;
   if (title) offer.title = title;
   if (category) offer.category = category;
   if (original) offer.original = Number(original);
   if (price) offer.price = Number(price);
   if (terms) offer.terms = terms;
   if (expiryDate !== undefined) offer.expiryDate = expiryDate || null;
+  if (startDate !== undefined) offer.startDate = startDate || null;
+  if (maxInventory !== undefined) offer.maxInventory = maxInventory ? Number(maxInventory) : null;
+  if (perCustomerLimit !== undefined) offer.perCustomerLimit = perCustomerLimit ? Number(perCustomerLimit) : null;
+  if (redemptionDays !== undefined) offer.redemptionDays = Array.isArray(redemptionDays) && redemptionDays.length ? redemptionDays.map(Number) : null;
+  if (redemptionHoursFrom !== undefined || redemptionHoursTo !== undefined) {
+    offer.redemptionHours = (redemptionHoursFrom && redemptionHoursTo) ? { from: redemptionHoursFrom, to: redemptionHoursTo } : null;
+  }
   db.save();
   res.json({ offer });
 });
@@ -1042,7 +1199,7 @@ app.post('/api/admin/merchants/:id/payouts', requireAdmin, (req, res) => {
   if (merchant.email) {
     sendEmail(merchant.email, `You've been paid $${payout.amount} — Waffer`,
       emailTemplate('Payout confirmation', `
-        <p>Hi ${merchant.name},</p>
+        <p>Hi ${escapeHtml(merchant.name)},</p>
         <p>We've recorded a payout to your business:</p>
         <table style="width:100%;margin:16px 0;border-collapse:collapse;">
           <tr><td style="padding:6px 0;color:#64748B;">Amount</td><td style="padding:6px 0;text-align:right;font-weight:700;">$${payout.amount}</td></tr>
