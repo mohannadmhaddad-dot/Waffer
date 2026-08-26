@@ -639,7 +639,7 @@ async function renderDealOfDay() {
     const slot = document.getElementById('dealOfDaySlot');
     if (!slot) return;
     if (!offers.length) { slot.innerHTML = ''; return; }
-    const best = [...offers].sort((a, b) => (1 - a.price / a.original) < (1 - b.price / b.original) ? 1 : -1)[0];
+    const best = offers.find(o => o.featured) || [...offers].sort((a, b) => (1 - a.price / a.original) < (1 - b.price / b.original) ? 1 : -1)[0];
     const pct = Math.round((1 - best.price / best.original) * 100);
     slot.innerHTML = `
       <div class="deal-of-day">
@@ -1081,10 +1081,11 @@ async function renderAdmin() {
       <td><a href="#" class="offer-link" onclick="openOfferDetail(${o.id});return false;">${o.title}</a></td>
       <td>${o.merchantName}</td><td>$${o.price}</td>
       <td>${o.reviewCount ? starString(o.avgRating) + ' (' + o.reviewCount + ')' : '—'}</td>
-      <td>${o.sold}</td><td>${o.status}</td>
+      <td>${o.sold}</td><td>${o.status}${o.featured ? ' <span title="Deal of the day" style="color:var(--accent);">★</span>' : ''}</td>
       <td>
         <button class="row-btn" onclick="openEditOffer(${o.id})">Edit</button>
         <button class="row-btn" onclick="toggleOfferStatus(${o.id})">${o.status === 'Live' ? 'Pause' : 'Resume'}</button>
+        <button class="row-btn" onclick="toggleFeatured(${o.id})">${o.featured ? 'Unfeature' : 'Feature'}</button>
       </td>
     </tr>
   `).join('') || `<tr><td colspan="8" class="empty">No offers yet.</td></tr>`;
@@ -1114,6 +1115,16 @@ async function uploadOfferImage(offerId, input) {
 async function toggleOfferStatus(id) {
   await api(`/api/admin/offers/${id}/toggle`, { method: 'PATCH' });
   renderAdmin();
+}
+
+async function toggleFeatured(id) {
+  try {
+    const { offer } = await api(`/api/admin/offers/${id}/feature`, { method: 'PATCH' });
+    renderAdmin();
+    toast(offer.featured ? 'Set as Deal of the Day.' : 'Removed from Deal of the Day.', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
 }
 
 function openEditOffer(id) {
