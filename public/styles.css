@@ -392,3 +392,44 @@ footer{text-align:center;padding:24px;color:var(--muted);font-size:12px;border-t
 .op-log-row:last-child{border-bottom:none;}
 .op-log-code{font-family:'Courier New',monospace;font-weight:700;}
 .op-log-meta{color:rgba(255,255,255,0.6);}
+
+/* ============ Trend chart (shared: admin overview + merchant dashboard) ============ */
+.trend-chart-wrap{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px 22px;margin-bottom:20px;box-shadow:var(--shadow);}
+.trend-chart-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;}
+.trend-chart{display:flex;align-items:flex-end;gap:3px;height:140px;}
+.trend-bar-wrap{flex:1;display:flex;align-items:flex-end;height:100%;min-width:4px;}
+.trend-bar{width:100%;background:var(--brand);border-radius:3px 3px 0 0;min-height:2px;transition:background 0.15s,opacity 0.15s;cursor:default;}
+.trend-bar-wrap:hover .trend-bar{background:var(--accent);}
+.trend-chart-empty{text-align:center;color:var(--muted);font-size:13px;padding:40px 0;}
+.top-list-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);font-size:13.5px;}
+.top-list-row:last-child{border-bottom:none;}
+.top-list-rank{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--brand-light);color:var(--brand-dark);font-size:11px;font-weight:800;margin-right:10px;}
+
+/* ============ Wallet enhancements ============ */
+.tk-saved-banner{background:linear-gradient(135deg,var(--brand) 0%,var(--brand-dark) 100%);color:#fff;border-radius:14px;padding:16px 20px;margin-bottom:16px;font-family:var(--font-display);font-size:15px;font-weight:700;}
+.tk-saved-banner .amount{color:var(--panel-ink);font-size:19px;}
+.wallet-toolbar{display:flex;gap:10px;margin-bottom:14px;}
+.wallet-search{flex:1;padding:10px 14px;border-radius:10px;border:1.5px solid var(--rule);font-size:13.5px;}
+.wallet-sort{padding:10px 12px;border-radius:10px;border:1.5px solid var(--rule);font-size:13px;background:#fff;}
+@media (max-width:520px){.wallet-toolbar{flex-direction:column;}}
+
+/* ============ Profile redesign ============ */
+.profile-header{display:flex;align-items:center;gap:14px;margin-bottom:16px;}
+.profile-avatar{width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,var(--brand) 0%,var(--brand-dark) 100%);color:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-size:20px;font-weight:800;flex-shrink:0;}
+.profile-name{font-family:var(--font-display);font-size:18px;font-weight:700;color:var(--text);}
+.profile-since{font-size:12px;color:var(--muted);margin-top:2px;}
+.profile-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
+.profile-stat-card{background:var(--bg);border-radius:10px;padding:12px 14px;text-align:center;}
+.profile-stat-value{font-family:var(--font-display);font-size:19px;font-weight:800;color:var(--brand-dark);}
+.profile-stat-label{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:0.4px;margin-top:2px;}
+.profile-birthday-note{background:var(--accent);color:#fff;border-radius:10px;padding:10px 14px;font-size:13px;font-weight:600;margin-bottom:16px;text-align:center;}
+.profile-section-label{font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin:18px 0 10px;}
+
+/* ============ Occasion picker (gift flow) ============ */
+.occasion-picker{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
+@media (max-width:480px){.occasion-picker{grid-template-columns:repeat(3,1fr);}}
+.occasion-card{border-radius:12px;padding:12px 6px;text-align:center;cursor:pointer;border:2px solid var(--rule);background:#fff;transition:transform 0.1s,border-color 0.15s;}
+.occasion-card:hover{transform:translateY(-2px);}
+.occasion-card.active{border-color:var(--c1);background:linear-gradient(135deg, color-mix(in srgb, var(--c1) 12%, white) 0%, white 100%);}
+.occasion-emoji{font-size:22px;line-height:1;margin-bottom:5px;}
+.occasion-label{font-size:10.5px;font-weight:700;color:var(--ink-soft);}

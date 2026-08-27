@@ -1,9 +1,46 @@
 const countryCodes = [
   ['+961','Lebanon'],['+965','Kuwait'],['+966','Saudi Arabia'],['+971','UAE'],['+974','Qatar'],
-  ['+973','Bahrain'],['+968','Oman'],['+962','Jordan'],['+20','Egypt'],['+1','US/Canada'],
-  ['+44','UK'],['+33','France'],['+49','Germany'],['+90','Turkey'],['+91','India'],
-  ['+61','Australia'],['+81','Japan'],['+86','China'],['+7','Russia'],['+27','South Africa'],
-  ['+55','Brazil'],['+52','Mexico'],['+34','Spain'],['+39','Italy'],['+31','Netherlands']
+  ['+973','Bahrain'],['+968','Oman'],['+962','Jordan'],
+  ['+93','Afghanistan'],['+355','Albania'],['+213','Algeria'],['+1684','American Samoa'],['+376','Andorra'],
+  ['+244','Angola'],['+1264','Anguilla'],['+1268','Antigua and Barbuda'],['+54','Argentina'],['+374','Armenia'],
+  ['+297','Aruba'],['+61','Australia'],['+43','Austria'],['+994','Azerbaijan'],['+1242','Bahamas'],
+  ['+880','Bangladesh'],['+1246','Barbados'],['+375','Belarus'],['+32','Belgium'],['+501','Belize'],
+  ['+229','Benin'],['+1441','Bermuda'],['+975','Bhutan'],['+591','Bolivia'],['+387','Bosnia and Herzegovina'],
+  ['+267','Botswana'],['+55','Brazil'],['+673','Brunei'],['+359','Bulgaria'],['+226','Burkina Faso'],
+  ['+257','Burundi'],['+855','Cambodia'],['+237','Cameroon'],['+1','Canada'],['+238','Cape Verde'],
+  ['+1345','Cayman Islands'],['+236','Central African Republic'],['+235','Chad'],['+56','Chile'],['+86','China'],
+  ['+57','Colombia'],['+269','Comoros'],['+242','Congo'],['+243','Congo (DRC)'],['+682','Cook Islands'],
+  ['+506','Costa Rica'],['+385','Croatia'],['+53','Cuba'],['+357','Cyprus'],['+420','Czech Republic'],
+  ['+45','Denmark'],['+253','Djibouti'],['+1767','Dominica'],['+1809','Dominican Republic'],['+593','Ecuador'],
+  ['+20','Egypt'],['+503','El Salvador'],['+240','Equatorial Guinea'],['+291','Eritrea'],['+372','Estonia'],
+  ['+268','Eswatini'],['+251','Ethiopia'],['+679','Fiji'],['+358','Finland'],['+33','France'],
+  ['+241','Gabon'],['+220','Gambia'],['+995','Georgia'],['+49','Germany'],['+233','Ghana'],
+  ['+350','Gibraltar'],['+30','Greece'],['+1473','Grenada'],['+1671','Guam'],['+502','Guatemala'],
+  ['+224','Guinea'],['+245','Guinea-Bissau'],['+592','Guyana'],['+509','Haiti'],['+504','Honduras'],
+  ['+852','Hong Kong'],['+36','Hungary'],['+354','Iceland'],['+91','India'],['+62','Indonesia'],
+  ['+98','Iran'],['+964','Iraq'],['+353','Ireland'],['+972','Israel'],['+39','Italy'],
+  ['+225','Ivory Coast'],['+1876','Jamaica'],['+81','Japan'],['+254','Kenya'],['+686','Kiribati'],
+  ['+850','North Korea'],['+82','South Korea'],['+996','Kyrgyzstan'],['+856','Laos'],['+371','Latvia'],
+  ['+266','Lesotho'],['+231','Liberia'],['+218','Libya'],['+423','Liechtenstein'],['+370','Lithuania'],
+  ['+352','Luxembourg'],['+853','Macau'],['+389','North Macedonia'],['+261','Madagascar'],['+265','Malawi'],
+  ['+60','Malaysia'],['+960','Maldives'],['+223','Mali'],['+356','Malta'],['+692','Marshall Islands'],
+  ['+222','Mauritania'],['+230','Mauritius'],['+52','Mexico'],['+691','Micronesia'],['+373','Moldova'],
+  ['+377','Monaco'],['+976','Mongolia'],['+382','Montenegro'],['+212','Morocco'],['+258','Mozambique'],
+  ['+95','Myanmar'],['+264','Namibia'],['+674','Nauru'],['+977','Nepal'],['+31','Netherlands'],
+  ['+64','New Zealand'],['+505','Nicaragua'],['+227','Niger'],['+234','Nigeria'],['+683','Niue'],
+  ['+47','Norway'],['+92','Pakistan'],['+680','Palau'],['+970','Palestine'],['+507','Panama'],
+  ['+675','Papua New Guinea'],['+595','Paraguay'],['+51','Peru'],['+63','Philippines'],['+48','Poland'],
+  ['+351','Portugal'],['+1787','Puerto Rico'],['+40','Romania'],['+7','Russia'],['+250','Rwanda'],
+  ['+1869','Saint Kitts and Nevis'],['+1758','Saint Lucia'],['+1784','Saint Vincent and the Grenadines'],['+685','Samoa'],['+378','San Marino'],
+  ['+239','Sao Tome and Principe'],['+221','Senegal'],['+381','Serbia'],['+248','Seychelles'],['+232','Sierra Leone'],
+  ['+65','Singapore'],['+421','Slovakia'],['+386','Slovenia'],['+677','Solomon Islands'],['+252','Somalia'],
+  ['+27','South Africa'],['+211','South Sudan'],['+34','Spain'],['+94','Sri Lanka'],['+249','Sudan'],
+  ['+597','Suriname'],['+46','Sweden'],['+41','Switzerland'],['+963','Syria'],['+886','Taiwan'],
+  ['+992','Tajikistan'],['+255','Tanzania'],['+66','Thailand'],['+670','Timor-Leste'],['+228','Togo'],
+  ['+676','Tonga'],['+1868','Trinidad and Tobago'],['+216','Tunisia'],['+90','Turkey'],['+993','Turkmenistan'],
+  ['+688','Tuvalu'],['+256','Uganda'],['+380','Ukraine'],['+44','United Kingdom'],['+1','United States'],
+  ['+598','Uruguay'],['+998','Uzbekistan'],['+678','Vanuatu'],['+379','Vatican City'],['+58','Venezuela'],
+  ['+84','Vietnam'],['+967','Yemen'],['+260','Zambia'],['+263','Zimbabwe']
 ];
 
 const catIcons = {
@@ -80,6 +117,35 @@ function fmtDateTime(ts) {
   return `${datePart}, ${timePart}`;
 }
 
+/* Shared trend chart used by both admin overview and merchant dashboard.
+   No charting library — a plain set of bars scaled to the highest value in range. */
+function renderTrendChart(containerId, data, valueKey) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  if (!data || data.length === 0) {
+    el.innerHTML = `<div class="trend-chart-empty">No sales in this period.</div>`;
+    return;
+  }
+  const max = Math.max(...data.map(d => d[valueKey]), 1);
+  el.innerHTML = `<div class="trend-chart">${data.map(d => {
+    const pct = Math.max((d[valueKey] / max) * 100, 2);
+    const shortDate = new Date(d.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    return `<div class="trend-bar-wrap" title="${shortDate}: ${d[valueKey]}"><div class="trend-bar" style="height:${pct}%;"></div></div>`;
+  }).join('')}</div>`;
+}
+
+function renderTopList(containerId, items, labelKey, valueKey, valuePrefix) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  if (!items || items.length === 0) {
+    el.innerHTML = `<div class="empty">No data in this period.</div>`;
+    return;
+  }
+  el.innerHTML = items.map((item, i) => `
+    <div class="top-list-row"><span><span class="top-list-rank">${i + 1}</span>${escapeHtml(item[labelKey])}</span><strong>${valuePrefix || ''}${item[valueKey]}</strong></div>
+  `).join('');
+}
+
 /* ---------- Customer auth ---------- */
 function setAuthTab(tab) {
   document.querySelectorAll('#authTabs button').forEach(b => b.classList.remove('active'));
@@ -127,8 +193,10 @@ async function doResetPassword() {
 }
 
 function populateCountryCodes() {
-  const sel = document.getElementById('regCountryCode');
-  sel.innerHTML = countryCodes.map(([code, name]) => `<option value="${code}">${code} ${name}</option>`).join('');
+  const options = countryCodes.map(([code, name]) => `<option value="${code}">${code} ${name}</option>`).join('');
+  document.getElementById('regCountryCode').innerHTML = options;
+  const giftSel = document.getElementById('giftCountryCode');
+  if (giftSel) giftSel.innerHTML = options;
 }
 
 async function refreshAuth() {
@@ -228,7 +296,35 @@ function openProfile() {
   document.getElementById('profGender').value = currentUser.gender || '';
   document.getElementById('profBirthday').value = currentUser.birthday || '';
   clearNotice('profileNotice');
+
+  const initials = (currentUser.name || '??').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
+  document.getElementById('profAvatar').textContent = initials;
+  document.getElementById('profHeaderName').textContent = currentUser.name || '';
+
+  const birthdayNoteEl = document.getElementById('profBirthdayNote');
+  if (currentUser.birthday) {
+    const bMonth = new Date(currentUser.birthday + 'T00:00:00').getMonth();
+    const nowMonth = new Date().getMonth();
+    birthdayNoteEl.innerHTML = bMonth === nowMonth ? `<div class="profile-birthday-note">🎂 Happy birthday month!</div>` : '';
+  } else {
+    birthdayNoteEl.innerHTML = '';
+  }
+
   openModal('profileModal');
+  loadProfileStats();
+}
+
+async function loadProfileStats() {
+  try {
+    const { totalBought, totalSaved, memberSince } = await api('/api/users/me/stats');
+    document.getElementById('profHeaderSince').textContent = 'Member since ' + fmtDate(memberSince);
+    document.getElementById('profStats').innerHTML = `
+      <div class="profile-stat-card"><div class="profile-stat-value">${totalBought}</div><div class="profile-stat-label">Vouchers bought</div></div>
+      <div class="profile-stat-card"><div class="profile-stat-value">$${totalSaved}</div><div class="profile-stat-label">Total saved</div></div>
+    `;
+  } catch (e) {
+    console.log('profile stats load failed', e.message);
+  }
 }
 
 async function saveProfile() {
@@ -324,6 +420,13 @@ function opRedeemPanel(subLabel) {
           <input class="op-code-input" id="opCodeInput" placeholder="WQ-8F2K91" autocomplete="off" />
           <button class="op-check-btn" onclick="opCheckCode()">Check</button>
           <div class="op-cam-row">📷 Camera scan — coming soon</div>
+          <button class="tk-cancel-link" style="color:rgba(255,255,255,0.65);margin-top:10px;" onclick="toggleBulkRedeem()">A group with multiple tickets? Redeem several at once →</button>
+          <div id="opBulkPanel" style="display:none;margin-top:14px;">
+            <div class="op-scan-label">One code per line</div>
+            <textarea class="op-code-input" id="opBulkCodes" style="font-size:14px;letter-spacing:1px;text-align:left;height:100px;padding:12px;" placeholder="WQ-8F2K91&#10;WQ-9K3L02&#10;WQ-7H1M55"></textarea>
+            <button class="op-check-btn" onclick="opBulkRedeem()">Redeem all</button>
+            <div id="opBulkResults" style="margin-top:12px;"></div>
+          </div>
         </div>
         <div class="op-result-col">
           <div id="opResultArea"><div class="op-result-empty">Enter a code to see voucher details here.</div></div>
@@ -426,57 +529,172 @@ async function loadRecentRedemptions() {
   } catch (e) { /* ignore */ }
 }
 
+function toggleBulkRedeem() {
+  const panel = document.getElementById('opBulkPanel');
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+}
+
+async function opBulkRedeem() {
+  const raw = document.getElementById('opBulkCodes').value;
+  const codes = raw.split(/[\n,]/).map(c => c.trim()).filter(Boolean);
+  const resultsEl = document.getElementById('opBulkResults');
+  if (codes.length === 0) return;
+  resultsEl.innerHTML = `<div style="font-size:12.5px;color:rgba(255,255,255,0.6);">Redeeming ${codes.length}…</div>`;
+  const results = [];
+  for (const code of codes) {
+    try {
+      const { voucher } = await api('/api/vouchers/redeem', { method: 'POST', body: { code } });
+      results.push({ code, ok: true, title: voucher.offerTitle });
+    } catch (e) {
+      results.push({ code, ok: false, error: e.message });
+    }
+  }
+  const successCount = results.filter(r => r.ok).length;
+  resultsEl.innerHTML = `
+    <div style="font-size:12.5px;color:rgba(255,255,255,0.85);margin-bottom:8px;font-weight:700;">${successCount} of ${results.length} redeemed</div>
+    ${results.map(r => `
+      <div class="op-log-row">
+        <span class="op-log-code">${r.code}</span>
+        <span class="op-log-meta" style="color:${r.ok ? '#86EFAC' : '#FCA5A5'};">${r.ok ? 'Redeemed' : r.error}</span>
+      </div>
+    `).join('')}
+  `;
+  if (successCount > 0) {
+    document.getElementById('opBulkCodes').value = '';
+    loadRecentRedemptions();
+    if (currentMerchant.role === 'manager') loadMerchantOverview();
+  }
+}
+
 function renderManagerDashboard() {
   const el = document.getElementById('merchantLoggedInContent');
   el.innerHTML = `
     <h2>${currentMerchant.merchantName} — Dashboard</h2>
-    <div class="stat-grid">
-      <div class="stat-card"><div class="stat-label">Vouchers sold</div><div class="stat-value" id="mdSold">0</div></div>
-      <div class="stat-card"><div class="stat-label">Redeemed</div><div class="stat-value" id="mdRedeemed">0</div></div>
-      <div class="stat-card"><div class="stat-label">Sales volume</div><div class="stat-value" id="mdRevenue">$0</div></div>
-      <div class="stat-card"><div class="stat-label">Your payout</div><div class="stat-value" id="mdPayout">$0</div></div>
+    <div class="mini-tabs" style="max-width:640px;flex-wrap:wrap;">
+      <button class="active" data-mtab="overview" onclick="setMerchantTab('overview')">Overview</button>
+      <button data-mtab="offers" onclick="setMerchantTab('offers')">Offers</button>
+      <button data-mtab="sales" onclick="setMerchantTab('sales')">Sales</button>
+      <button data-mtab="payouts" onclick="setMerchantTab('payouts')">Payouts</button>
+      <button data-mtab="branches" onclick="setMerchantTab('branches')">Branches</button>
+      <button data-mtab="profile" onclick="setMerchantTab('profile')">Profile</button>
+      <button data-mtab="redeem" onclick="setMerchantTab('redeem')">Redeem</button>
     </div>
-    <p class="note" id="mdCommissionNote" style="margin-bottom:20px;"></p>
-    <div class="panel">
-      <h3 style="margin-bottom:14px;">Your offers</h3>
-      <table><thead><tr><th>Offer</th><th>Status</th><th>Sold</th><th>Redeemed</th><th>Revenue</th></tr></thead><tbody id="mdOffersTable"></tbody></table>
-    </div>
-    <div class="panel">
-      <h3 style="margin-bottom:14px;">Recent sales</h3>
-      <table><thead><tr><th>Voucher</th><th>Buyer</th><th>Price</th><th>Status</th><th>Purchased</th><th>Redeemed</th><th>Branch</th></tr></thead><tbody id="mdRecentTable"></tbody></table>
-    </div>
-    <div class="panel">
-      <h3 style="margin-bottom:14px;">Payouts from Waffer</h3>
-      <div class="stat-grid" style="margin-bottom:16px;">
-        <div class="stat-card"><div class="stat-label">Outstanding balance</div><div class="stat-value" id="mpOutstanding">$0</div></div>
-        <div class="stat-card"><div class="stat-label">Total paid to date</div><div class="stat-value" id="mpTotalPaid">$0</div></div>
+
+    <div id="mtab-overview" class="admin-tab-panel">
+      <div class="panel">
+        <div class="two-col">
+          <div class="field" style="margin-bottom:0;"><label>From</label><input id="mdFrom" type="date" /></div>
+          <div class="field" style="margin-bottom:0;"><label>To</label><input id="mdTo" type="date" /></div>
+        </div>
+        <button class="btn btn-secondary" style="margin-top:12px;" onclick="loadMerchantOverview()">Apply</button>
+        <button class="btn btn-secondary" style="margin-top:12px;" onclick="document.getElementById('mdFrom').value='';document.getElementById('mdTo').value='';loadMerchantOverview();">Clear (all time)</button>
       </div>
-      <table><thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th></tr></thead><tbody id="mpHistoryTable"></tbody></table>
+      <div class="stat-grid">
+        <div class="stat-card"><div class="stat-label">Vouchers sold</div><div class="stat-value" id="mdSold">0</div></div>
+        <div class="stat-card"><div class="stat-label">Redeemed</div><div class="stat-value" id="mdRedeemed">0</div></div>
+        <div class="stat-card"><div class="stat-label">Sales volume</div><div class="stat-value" id="mdRevenue">$0</div></div>
+        <div class="stat-card"><div class="stat-label">Your payout</div><div class="stat-value" id="mdPayout">$0</div></div>
+      </div>
+      <p class="note" id="mdCommissionNote" style="margin-bottom:20px;"></p>
+      <div class="trend-chart-wrap">
+        <div class="trend-chart-head"><h3 style="margin:0;font-size:15px;">Sales (GMV) by day</h3></div>
+        <div id="mdTrendChart"></div>
+      </div>
     </div>
-    ${opRedeemPanel('manager view')}
+
+    <div id="mtab-offers" class="admin-tab-panel" style="display:none;">
+      <div class="panel">
+        <h3 style="margin-bottom:14px;">Your offers</h3>
+        <table><thead><tr><th>Offer</th><th>Status</th><th>Sold</th><th>Redeemed</th><th>Revenue</th><th>Rating</th></tr></thead><tbody id="mdOffersTable"></tbody></table>
+      </div>
+    </div>
+
+    <div id="mtab-sales" class="admin-tab-panel" style="display:none;">
+      <div class="panel">
+        <h3 style="margin-bottom:14px;">Recent sales</h3>
+        <table><thead><tr><th>Voucher</th><th>Buyer</th><th>Price</th><th>Status</th><th>Purchased</th><th>Redeemed</th><th>Branch</th></tr></thead><tbody id="mdRecentTable"></tbody></table>
+      </div>
+    </div>
+
+    <div id="mtab-payouts" class="admin-tab-panel" style="display:none;">
+      <div class="panel">
+        <h3 style="margin-bottom:14px;">Payouts from Waffer</h3>
+        <div class="stat-grid" style="margin-bottom:16px;">
+          <div class="stat-card"><div class="stat-label">Outstanding balance</div><div class="stat-value" id="mpOutstanding">$0</div></div>
+          <div class="stat-card"><div class="stat-label">Total paid to date</div><div class="stat-value" id="mpTotalPaid">$0</div></div>
+        </div>
+        <table><thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th></tr></thead><tbody id="mpHistoryTable"></tbody></table>
+      </div>
+    </div>
+
+    <div id="mtab-branches" class="admin-tab-panel" style="display:none;">
+      <div class="panel">
+        <h3 style="margin-bottom:14px;">Branches &amp; staff</h3>
+        <p class="note" style="margin-top:0;">Front desk accounts can look up and redeem vouchers, but can't see sales figures.</p>
+        <div id="mBranchesList"></div>
+      </div>
+    </div>
+
+    <div id="mtab-profile" class="admin-tab-panel" style="display:none;">
+      <div class="panel">
+        <h3 style="margin-bottom:14px;">Business profile</h3>
+        <div class="field"><label>Business name</label><input id="mpName" /></div>
+        <div class="field"><label>Contact / WhatsApp</label><input id="mpContact" /></div>
+        <div class="field"><label>Business email</label><input id="mpEmail" type="email" placeholder="finance@yourbusiness.com" /></div>
+        <div class="field"><label>Logo</label>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <div id="mpLogoPreview"></div>
+            <input type="file" accept="image/*" style="display:none" id="mpLogoFile" onchange="uploadMerchantLogo(this)" />
+            <button class="btn btn-secondary" onclick="document.getElementById('mpLogoFile').click()">Upload logo</button>
+          </div>
+        </div>
+        <div class="inline-notice" id="mpProfileNotice"></div>
+        <button class="btn btn-primary" onclick="saveMerchantProfile()">Save changes</button>
+      </div>
+    </div>
+
+    <div id="mtab-redeem" class="admin-tab-panel" style="display:none;">
+      ${opRedeemPanel('manager view')}
+    </div>
   `;
-  loadMerchantDashboard();
-  loadRecentRedemptions();
+  loadMerchantOverview();
 }
 
-async function loadMerchantDashboard() {
+function setMerchantTab(tab) {
+  document.querySelectorAll('[data-mtab]').forEach(b => b.classList.remove('active'));
+  document.querySelector(`[data-mtab="${tab}"]`).classList.add('active');
+  document.querySelectorAll('#merchantLoggedInContent .admin-tab-panel').forEach(p => p.style.display = 'none');
+  document.getElementById('mtab-' + tab).style.display = 'block';
+  if (tab === 'payouts') loadMerchantPayouts();
+  if (tab === 'branches') loadMerchantBranches();
+  if (tab === 'profile') loadMerchantProfile();
+  if (tab === 'redeem') loadRecentRedemptions();
+}
+
+async function loadMerchantOverview() {
+  const from = document.getElementById('mdFrom').value;
+  const to = document.getElementById('mdTo').value;
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
   try {
-    const d = await api('/api/merchant/dashboard');
+    const d = await api('/api/merchant/dashboard?' + params.toString());
+    window.__merchantDashboardCache = d;
     document.getElementById('mdSold').textContent = d.sold;
     document.getElementById('mdRedeemed').textContent = d.redeemed;
     document.getElementById('mdRevenue').textContent = '$' + d.revenue;
     document.getElementById('mdPayout').textContent = '$' + d.payout;
     document.getElementById('mdCommissionNote').textContent = `Your current commission rate is ${Math.round(d.commissionRate * 100)}%. Total commission deducted (at the rate active for each sale): $${d.commission}.`;
+    renderTrendChart('mdTrendChart', d.dailyTrend, 'gmv');
     document.getElementById('mdOffersTable').innerHTML = d.offers.map(o =>
-      `<tr><td>${o.title}</td><td>${o.status}</td><td>${o.sold}</td><td>${o.redeemed}</td><td>$${o.revenue}</td></tr>`
-    ).join('') || `<tr><td colspan="5" class="empty">No offers yet.</td></tr>`;
+      `<tr><td>${escapeHtml(o.title)}</td><td>${o.status}</td><td>${o.sold}</td><td>${o.redeemed}</td><td>$${o.revenue}</td><td>${o.reviewCount ? starString(o.avgRating) + ' (' + o.reviewCount + ')' : '—'}</td></tr>`
+    ).join('') || `<tr><td colspan="6" class="empty">No offers yet.</td></tr>`;
     document.getElementById('mdRecentTable').innerHTML = d.recent.map(v =>
       `<tr><td class="voucher-code">${v.code}</td><td>${escapeHtml(v.buyerName)}</td><td>$${v.price}</td><td><span class="status-pill status-${v.status}">${v.status}</span></td><td>${fmtDateTime(v.createdAt)}</td><td>${fmtDateTime(v.redeemedAt)}</td><td>${v.redeemedByLocation || '—'}</td></tr>`
     ).join('') || `<tr><td colspan="7" class="empty">No sales yet.</td></tr>`;
   } catch (e) {
     console.log('dashboard load failed', e.message);
   }
-  loadMerchantPayouts();
 }
 
 async function loadMerchantPayouts() {
@@ -485,10 +703,101 @@ async function loadMerchantPayouts() {
     document.getElementById('mpOutstanding').textContent = '$' + d.outstanding;
     document.getElementById('mpTotalPaid').textContent = '$' + d.totalPaid;
     document.getElementById('mpHistoryTable').innerHTML = d.payouts.map(p =>
-      `<tr><td>${fmtDateTime(p.createdAt)}</td><td>$${p.amount}</td><td>${p.method || 'Other'}</td><td>${p.note || '—'}</td></tr>`
+      `<tr><td>${fmtDateTime(p.createdAt)}</td><td>$${p.amount}</td><td>${p.method || 'Other'}</td><td>${escapeHtml(p.note) || '—'}</td></tr>`
     ).join('') || `<tr><td colspan="4" class="empty">No payouts logged yet.</td></tr>`;
   } catch (e) {
     console.log('payouts load failed', e.message);
+  }
+}
+
+async function loadMerchantBranches() {
+  const el = document.getElementById('mBranchesList');
+  try {
+    const { accounts } = await api('/api/merchant/accounts');
+    el.innerHTML = accounts.map(a => `
+      <div class="account-row">
+        <span>
+          ${escapeHtml(a.username)}${a.location ? ' — ' + escapeHtml(a.location) : ''}<span class="account-role-badge ${a.role}">${a.role === 'manager' ? 'Manager' : 'Front desk'}</span>
+          <div class="note" style="margin-top:2px;">Password: <span class="voucher-code">${escapeHtml(a.plainPassword || '—')}</span></div>
+        </span>
+        <span>
+          ${a.role === 'frontdesk' ? `
+            <button class="row-btn" onclick="regenerateMyBranchPassword(${a.id})">New password</button>
+            <button class="row-btn danger" onclick="deleteMyBranchAccount(${a.id})">Remove</button>
+          ` : ''}
+        </span>
+      </div>
+    `).join('') || `<div class="empty">No branch accounts yet — ask Waffer to add one.</div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
+
+async function regenerateMyBranchPassword(accountId) {
+  try {
+    await api(`/api/merchant/accounts/${accountId}`, { method: 'PATCH', body: { regenerate: true } });
+    loadMerchantBranches();
+    toast('New password generated.', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function deleteMyBranchAccount(accountId) {
+  if (!confirm('Remove this branch account? They will no longer be able to log in.')) return;
+  try {
+    await api(`/api/merchant/accounts/${accountId}`, { method: 'DELETE' });
+    loadMerchantBranches();
+    toast('Branch account removed.', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function loadMerchantProfile() {
+  try {
+    const { merchant } = await api('/api/merchant/profile');
+    document.getElementById('mpName').value = merchant.name || '';
+    document.getElementById('mpContact').value = merchant.contact || '';
+    document.getElementById('mpEmail').value = merchant.email || '';
+    document.getElementById('mpLogoPreview').innerHTML = merchant.logoUrl
+      ? `<img src="${merchant.logoUrl}" style="width:44px;height:44px;border-radius:8px;object-fit:contain;background:#fff;border:1px solid var(--border);" />`
+      : `<div class="mini-logo-placeholder" style="width:44px;height:44px;">${(merchant.name || '??').slice(0,2).toUpperCase()}</div>`;
+  } catch (e) {
+    console.log('profile load failed', e.message);
+  }
+}
+
+async function saveMerchantProfile() {
+  clearNotice('mpProfileNotice');
+  const body = {
+    name: document.getElementById('mpName').value.trim(),
+    contact: document.getElementById('mpContact').value.trim(),
+    email: document.getElementById('mpEmail').value.trim()
+  };
+  try {
+    await api('/api/merchant/profile', { method: 'PATCH', body });
+    showNotice('mpProfileNotice', 'Saved.', 'success');
+    currentMerchant.merchantName = body.name;
+    renderMerchantArea();
+  } catch (e) {
+    showNotice('mpProfileNotice', e.message, 'error');
+  }
+}
+
+async function uploadMerchantLogo(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('logo', file);
+  try {
+    const res = await fetch('/api/merchant/profile/logo-upload', { method: 'POST', credentials: 'include', body: formData });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || 'Upload failed.');
+    loadMerchantProfile();
+    toast('Logo updated.', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
   }
 }
 
@@ -796,6 +1105,35 @@ function startPurchase() {
   openModal('purchaseModal');
 }
 
+const GIFT_OCCASIONS = [
+  { id: 'birthday', emoji: '🎂', label: 'Birthday', c1: '#EC4899', c2: '#9D174D', defaultMsg: 'Happy birthday! Go treat yourself.' },
+  { id: 'anniversary', emoji: '💜', label: 'Anniversary', c1: '#7C3AED', c2: '#4C1D95', defaultMsg: "Happy anniversary — here's to many more." },
+  { id: 'congratulations', emoji: '🎉', label: 'Congrats', c1: '#F5A623', c2: '#B45309', defaultMsg: 'Congratulations! You earned this.' },
+  { id: 'thankyou', emoji: '🙏', label: 'Thank You', c1: '#16A34A', c2: '#14532D', defaultMsg: 'Just a small thank you.' },
+  { id: 'justbecause', emoji: '💛', label: 'Just Because', c1: '#EAB308', c2: '#854D0E', defaultMsg: 'Thinking of you — enjoy this!' },
+  { id: 'newjob', emoji: '🎓', label: 'New Job / Grad', c1: '#2563EB', c2: '#1E3A8A', defaultMsg: 'So proud of you — congrats on this new chapter!' },
+  { id: 'wedding', emoji: '💍', label: 'Wedding', c1: '#DB2777', c2: '#831843', defaultMsg: 'Wishing you both a lifetime of happiness.' }
+];
+let selectedOccasion = null;
+
+function renderOccasionPicker() {
+  document.getElementById('occasionPicker').innerHTML = GIFT_OCCASIONS.map(o => `
+    <div class="occasion-card ${selectedOccasion === o.id ? 'active' : ''}" style="--c1:${o.c1};--c2:${o.c2};" onclick="selectOccasion('${o.id}')">
+      <div class="occasion-emoji">${o.emoji}</div>
+      <div class="occasion-label">${o.label}</div>
+    </div>
+  `).join('');
+}
+
+function selectOccasion(id) {
+  selectedOccasion = selectedOccasion === id ? null : id;
+  renderOccasionPicker();
+  const occasion = GIFT_OCCASIONS.find(o => o.id === selectedOccasion);
+  const msgBox = document.getElementById('giftMessage');
+  if (occasion && !msgBox.value.trim()) msgBox.placeholder = occasion.defaultMsg;
+  updateGiftPreview();
+}
+
 function startGift() {
   if (!currentUser) { closeModal('offerModal'); openModal('authModal'); return; }
   closeModal('offerModal');
@@ -808,8 +1146,11 @@ function startGift() {
   document.getElementById('giftEmail').value = '';
   document.getElementById('giftPhone').value = '';
   document.getElementById('giftMessage').value = '';
+  document.getElementById('giftMessage').placeholder = 'Happy birthday!';
   document.getElementById('giftLookupNote').textContent = '';
   document.getElementById('giftPreviewPanel').style.display = 'none';
+  selectedOccasion = null;
+  renderOccasionPicker();
   clearNotice('giftNotice');
   openModal('giftModal');
 }
@@ -843,9 +1184,11 @@ function updateGiftPreview() {
   const panel = document.getElementById('giftPreviewPanel');
   if (!email) { panel.style.display = 'none'; return; }
   const message = document.getElementById('giftMessage').value.trim();
+  const occasion = GIFT_OCCASIONS.find(o => o.id === selectedOccasion);
   panel.style.display = 'block';
+  panel.style.background = occasion ? `linear-gradient(135deg, ${occasion.c1} 0%, ${occasion.c2} 100%)` : '';
   panel.innerHTML = `
-    <div class="label">They'll see</div>
+    <div class="label">${occasion ? occasion.emoji + ' ' + occasion.label : "They'll see"}</div>
     <div class="headline">${currentUser ? escapeHtml(currentUser.name.split(' ')[0]) : 'You'} sent them ${escapeHtml(currentOffer.title)}</div>
     ${message ? `<div style="font-size:13px;color:rgba(255,255,255,0.85);margin-top:8px;font-style:italic;">"${message}"</div>` : ''}
     <div class="rule"></div>
@@ -875,14 +1218,16 @@ async function completePurchase() {
 async function completeGift() {
   clearNotice('giftNotice');
   const recipientEmail = document.getElementById('giftEmail').value.trim();
-  const recipientPhone = document.getElementById('giftPhone').value.trim();
+  const phoneDigits = document.getElementById('giftPhone').value.trim();
+  const giftCountryCode = document.getElementById('giftCountryCode').value;
+  const recipientPhone = phoneDigits ? `${giftCountryCode}${phoneDigits}` : '';
   const message = document.getElementById('giftMessage').value.trim();
   if (!recipientEmail && !recipientPhone) {
     showNotice('giftNotice', "Enter the recipient's email or phone number.", 'error');
     return;
   }
   try {
-    const { claimed, recipientName } = await api('/api/vouchers/gift', { method: 'POST', body: { offerId: currentOffer.id, recipientEmail, recipientPhone, message } });
+    const { claimed, recipientName } = await api('/api/vouchers/gift', { method: 'POST', body: { offerId: currentOffer.id, recipientEmail, recipientPhone, message, occasion: selectedOccasion } });
     closeModal('giftModal');
     renderOffers();
     if (claimed) {
@@ -914,8 +1259,15 @@ let walletFilter = 'all';
 function setWalletFilter(f) { walletFilter = f; renderWalletList(); }
 
 async function renderWallet() {
-  const { vouchers } = await api('/api/vouchers/mine');
+  const { vouchers, totalSaved } = await api('/api/vouchers/mine');
   window.__myVouchersCache = vouchers;
+  const banner = document.getElementById('walletSavedBanner');
+  if (totalSaved > 0) {
+    banner.style.display = 'block';
+    banner.innerHTML = `You've saved <span class="amount">$${totalSaved}</span> with Waffer so far 🎉`;
+  } else {
+    banner.style.display = 'none';
+  }
   renderWalletList();
 
   const { vouchers: sent } = await api('/api/vouchers/sent');
@@ -933,19 +1285,47 @@ async function renderWallet() {
   `).join('');
 }
 
+function isExpiringSoon(v) {
+  if (v.status !== 'active' || !v.expiryDate) return false;
+  const days = daysUntil(v.expiryDate);
+  return days != null && days <= 14;
+}
+
 function renderWalletList() {
-  const vouchers = window.__myVouchersCache || [];
+  const allVouchers = window.__myVouchersCache || [];
+  const search = (document.getElementById('walletSearch').value || '').toLowerCase();
+  let vouchers = search
+    ? allVouchers.filter(v => v.offerTitle.toLowerCase().includes(search) || (v.merchantName || '').toLowerCase().includes(search))
+    : allVouchers;
+
   const activeCount = vouchers.filter(v => v.status === 'active').length;
   const usedCount = vouchers.filter(v => v.status === 'redeemed').length;
+  const expiringCount = vouchers.filter(isExpiringSoon).length;
   document.getElementById('walletFilterPills').innerHTML = `
     <span class="tk-filter-pill ${walletFilter === 'all' ? 'active' : ''}" onclick="setWalletFilter('all')">All ${vouchers.length}</span>
     <span class="tk-filter-pill ${walletFilter === 'active' ? 'active' : ''}" onclick="setWalletFilter('active')">Active ${activeCount}</span>
+    <span class="tk-filter-pill ${walletFilter === 'expiring' ? 'active' : ''}" onclick="setWalletFilter('expiring')">Expiring soon ${expiringCount}</span>
     <span class="tk-filter-pill ${walletFilter === 'used' ? 'active' : ''}" onclick="setWalletFilter('used')">Used ${usedCount}</span>
   `;
-  const filtered = walletFilter === 'all' ? vouchers : vouchers.filter(v => walletFilter === 'active' ? v.status === 'active' : v.status === 'redeemed');
+  let filtered = vouchers;
+  if (walletFilter === 'active') filtered = vouchers.filter(v => v.status === 'active');
+  else if (walletFilter === 'used') filtered = vouchers.filter(v => v.status === 'redeemed');
+  else if (walletFilter === 'expiring') filtered = vouchers.filter(isExpiringSoon);
+
+  const sortMode = document.getElementById('walletSort').value;
+  if (sortMode === 'expiry') {
+    filtered = [...filtered].sort((a, b) => {
+      const da = a.expiryDate ? new Date(a.expiryDate).getTime() : Infinity;
+      const db = b.expiryDate ? new Date(b.expiryDate).getTime() : Infinity;
+      return da - db;
+    });
+  } else {
+    filtered = [...filtered].sort((a, b) => b.createdAt - a.createdAt);
+  }
+
   const el = document.getElementById('walletList');
   if (filtered.length === 0) {
-    el.innerHTML = `<div class="tk-empty"><p>${vouchers.length === 0 ? 'No tickets yet.' : 'Nothing in this filter.'}</p><button class="tk-pill" style="max-width:200px;" onclick="switchView('customer')">Browse offers</button></div>`;
+    el.innerHTML = `<div class="tk-empty"><p>${allVouchers.length === 0 ? 'No tickets yet.' : 'Nothing in this filter.'}</p><button class="tk-pill" style="max-width:200px;" onclick="switchView('customer')">Browse offers</button></div>`;
     return;
   }
   el.innerHTML = filtered.map(v => {
@@ -1061,10 +1441,8 @@ function setAdminTab(tab) {
 
 async function renderAdmin() {
   const stats = await api('/api/admin/stats');
-  document.getElementById('aGMV').textContent = '$' + stats.gmv;
   document.getElementById('aMerchants').textContent = stats.merchants;
-  document.getElementById('aVouchers').textContent = stats.soldCount;
-  document.getElementById('aRedeemed').textContent = stats.redeemed;
+  loadOverview();
 
   await renderCategoryManageList();
 
@@ -1228,6 +1606,21 @@ async function editCommission(merchantId, currentRate) {
 }
 
 /* ---------- Finance ---------- */
+async function loadOverview() {
+  const from = document.getElementById('ovFrom').value;
+  const to = document.getElementById('ovTo').value;
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  const ov = await api('/api/admin/finance/overview?' + params.toString());
+  document.getElementById('aGMV').textContent = '$' + ov.gmv;
+  document.getElementById('aVouchers').textContent = ov.vouchersSold;
+  document.getElementById('aRedeemed').textContent = ov.vouchersRedeemed;
+  renderTrendChart('ovTrendChart', ov.dailyTrend, 'gmv');
+  renderTopList('ovTopOffers', ov.topOffers, 'title', 'revenue', '$');
+  renderTopList('ovTopMerchants', ov.topMerchants, 'name', 'revenue', '$');
+}
+
 async function loadFinance() {
   const from = document.getElementById('finFrom').value;
   const to = document.getElementById('finTo').value;

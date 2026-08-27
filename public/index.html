@@ -87,6 +87,14 @@
 
   <section class="view" id="view-wallet">
     <div class="tk-wallet-title">My wallet</div>
+    <div class="tk-saved-banner" id="walletSavedBanner" style="display:none;"></div>
+    <div class="wallet-toolbar">
+      <input class="wallet-search" id="walletSearch" placeholder="Search your tickets..." oninput="renderWalletList()" />
+      <select class="wallet-sort" id="walletSort" onchange="renderWalletList()">
+        <option value="recent">Newest first</option>
+        <option value="expiry">Expiring soonest</option>
+      </select>
+    </div>
     <div class="tk-filter-pills" id="walletFilterPills"></div>
     <div id="walletList"></div>
     <h2 style="margin-top:32px;font-family:var(--font-display);color:var(--ink);">Gifts you've sent</h2>
@@ -130,11 +138,28 @@
     </div>
 
     <div id="admin-tab-overview" class="admin-tab-panel">
+      <div class="panel">
+        <div class="panel-head"><h3 style="margin:0;">Date range</h3></div>
+        <div class="two-col">
+          <div class="field" style="margin-bottom:0;"><label>From</label><input id="ovFrom" type="date" /></div>
+          <div class="field" style="margin-bottom:0;"><label>To</label><input id="ovTo" type="date" /></div>
+        </div>
+        <button class="btn btn-secondary" style="margin-top:12px;" onclick="loadOverview()">Apply</button>
+        <button class="btn btn-secondary" style="margin-top:12px;" onclick="document.getElementById('ovFrom').value='';document.getElementById('ovTo').value='';loadOverview();">Clear (all time)</button>
+      </div>
       <div class="stat-grid">
-        <div class="stat-card"><div class="stat-label">GMV (USD)</div><div class="stat-value" id="aGMV">$0</div></div>
+        <div class="stat-card"><div class="stat-label">GMV (period)</div><div class="stat-value" id="aGMV">$0</div></div>
         <div class="stat-card"><div class="stat-label">Merchants onboarded</div><div class="stat-value" id="aMerchants">0</div></div>
-        <div class="stat-card"><div class="stat-label">Vouchers sold</div><div class="stat-value" id="aVouchers">0</div></div>
-        <div class="stat-card"><div class="stat-label">Redeemed</div><div class="stat-value" id="aRedeemed">0</div></div>
+        <div class="stat-card"><div class="stat-label">Vouchers sold (period)</div><div class="stat-value" id="aVouchers">0</div></div>
+        <div class="stat-card"><div class="stat-label">Redeemed (period)</div><div class="stat-value" id="aRedeemed">0</div></div>
+      </div>
+      <div class="trend-chart-wrap">
+        <div class="trend-chart-head"><h3 style="margin:0;font-size:15px;">Sales (GMV) by day</h3></div>
+        <div id="ovTrendChart"></div>
+      </div>
+      <div class="two-col">
+        <div class="panel"><h3 style="margin-bottom:10px;font-size:14px;">Top offers (period)</h3><div id="ovTopOffers"></div></div>
+        <div class="panel"><h3 style="margin-bottom:10px;font-size:14px;">Top merchants (period)</h3><div id="ovTopMerchants"></div></div>
       </div>
     </div>
 
@@ -264,10 +289,15 @@
 <div class="modal-overlay" id="profileModal">
   <div class="modal">
     <button class="modal-close" onclick="closeModal('profileModal')">&times;</button>
-    <h3>Your profile</h3>
+    <div class="profile-header">
+      <div class="profile-avatar" id="profAvatar">?</div>
+      <div><div class="profile-name" id="profHeaderName"></div><div class="profile-since" id="profHeaderSince"></div></div>
+    </div>
+    <div class="profile-stats" id="profStats"></div>
+    <div id="profBirthdayNote"></div>
+
+    <div class="profile-section-label">About you</div>
     <div class="field"><label>Full name</label><input id="profName" /></div>
-    <div class="field"><label>Email</label><input id="profEmail" disabled /></div>
-    <div class="field"><label>Mobile number</label><input id="profPhone" placeholder="+961 70 123 456" /></div>
     <div class="field"><label>Gender</label>
       <select id="profGender">
         <option value="">Prefer not to say</option>
@@ -277,10 +307,15 @@
       </select>
     </div>
     <div class="field"><label>Birthday</label><input id="profBirthday" type="date" /></div>
+
+    <div class="profile-section-label">Contact</div>
+    <div class="field"><label>Email</label><input id="profEmail" disabled /></div>
+    <div class="field"><label>Mobile number</label><input id="profPhone" placeholder="+961 70 123 456" /></div>
     <div class="inline-notice" id="profileNotice"></div>
     <button class="btn btn-primary btn-block" onclick="saveProfile()">Save changes</button>
+
     <hr class="modal-divider" />
-    <h3 style="font-size:16px;">Change password</h3>
+    <div class="profile-section-label">Security</div>
     <div class="field"><label>Current password</label><input id="profCurrentPassword" type="password" /></div>
     <div class="field"><label>New password</label><input id="profNewPassword" type="password" /></div>
     <div class="inline-notice" id="passwordNotice"></div>
@@ -324,7 +359,12 @@
       <input class="tk-recipient-input" id="giftEmail" placeholder="friend@example.com" oninput="checkGiftRecipient()" />
       <div id="giftLookupNote" style="margin-top:7px;font-size:12.5px;"></div>
       <div class="tk-field-label" style="margin-top:14px;">Or their phone</div>
-      <input class="tk-recipient-input" id="giftPhone" placeholder="+961 71 234 567" />
+      <div class="phone-row">
+        <select id="giftCountryCode"></select>
+        <input class="tk-recipient-input" id="giftPhone" placeholder="70 123 456" />
+      </div>
+      <div class="tk-field-label" style="margin-top:14px;">Occasion</div>
+      <div class="occasion-picker" id="occasionPicker"></div>
       <div class="tk-field-label" style="margin-top:14px;">Say something (optional)</div>
       <textarea class="tk-message-box" id="giftMessage" placeholder="Happy birthday!" oninput="updateGiftPreview()"></textarea>
       <div class="tk-gift-preview" id="giftPreviewPanel"></div>
