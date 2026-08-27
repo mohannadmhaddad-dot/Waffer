@@ -117,11 +117,69 @@ function money(n) {
   return Math.round(n * 100) / 100;
 }
 
+const STORE_TIMEZONE = 'Asia/Beirut';
+
+/* Returns the current wall-clock date/time in the store's timezone, DST-aware
+   (Node's built-in ICU data handles Beirut's DST rules automatically — no
+   external timezone library needed). */
+function nowInStoreTimezone() {
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: STORE_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false, weekday: 'short'
+  });
+  const parts = fmt.formatToParts(new Date());
+  const get = t => parts.find(p => p.type === t).value;
+  const weekdayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return {
+    dateStr: `${get('year')}-${get('month')}-${get('day')}`,
+    minutesSinceMidnight: Number(get('hour')) * 60 + Number(get('minute')),
+    dayOfWeek: weekdayMap[get('weekday')]
+  };
+}
+
+/* Same timezone conversion as above, but for an arbitrary past timestamp —
+   used to bucket sales/redemptions into the correct Beirut calendar day. */
+function dateKeyInStoreTimezone(timestampMs) {
+  const fmt = new Intl.DateTimeFormat('en-US', { timeZone: STORE_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const parts = fmt.formatToParts(new Date(timestampMs));
+  const get = t => parts.find(p => p.type === t).value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+/* Builds a day-by-day trend (GMV, vouchers sold, vouchers redeemed) from a list
+   of vouchers, bucketed by Beirut calendar day. Shared by admin finance and the
+   merchant dashboard so both charts are built the same, consistent way. */
+function buildDailyTrend(vouchers, fromStr, toStr) {
+  const byDay = {};
+  const ensure = key => { if (!byDay[key]) byDay[key] = { date: key, gmv: 0, sold: 0, redeemed: 0 }; return byDay[key]; };
+  vouchers.forEach(v => {
+    const key = dateKeyInStoreTimezone(v.createdAt);
+    if ((!fromStr || key >= fromStr) && (!toStr || key <= toStr)) {
+      const day = ensure(key);
+      day.gmv += v.price;
+      day.sold += 1;
+    }
+  });
+  vouchers.forEach(v => {
+    if (v.status === 'redeemed' && v.redeemedAt) {
+      const key = dateKeyInStoreTimezone(v.redeemedAt);
+      if ((!fromStr || key >= fromStr) && (!toStr || key <= toStr)) {
+        ensure(key).redeemed += 1;
+      }
+    }
+  });
+  return Object.values(byDay).sort((a, b) => a.date.localeCompare(b.date)).map(d => ({ ...d, gmv: money(d.gmv) }));
+}
+
+
 /* Validates an offer purchase against its own rules. buyerId is always the paying
    customer, even for gifts, since per-customer limits apply to who is buying. */
 function validateOfferPurchase(offer, buyerId, qty) {
   if (!offer || offer.status !== 'Live') return 'Offer is not available.';
-  if (offer.startDate && new Date(offer.startDate).getTime() > Date.now()) return 'This offer is not available yet.';
+  if (offer.startDate) {
+    const todayStr = nowInStoreTimezone().dateStr;
+    if (offer.startDate > todayStr) return 'This offer is not available yet.';
+  }
   if (typeof offer.maxInventory === 'number' && offer.sold + qty > offer.maxInventory) return 'This offer is sold out.';
   if (typeof offer.perCustomerLimit === 'number') {
     const alreadyBought = data.vouchers.filter(v => v.offerId === offer.id && v.buyerId === buyerId).length;
@@ -133,17 +191,16 @@ function validateOfferPurchase(offer, buyerId, qty) {
 }
 
 function validateRedemptionWindow(offer) {
-  const now = new Date();
+  const now = nowInStoreTimezone();
   if (Array.isArray(offer.redemptionDays) && offer.redemptionDays.length) {
-    if (!offer.redemptionDays.includes(now.getDay())) return 'This offer cannot be redeemed today.';
+    if (!offer.redemptionDays.includes(now.dayOfWeek)) return 'This offer cannot be redeemed today.';
   }
   if (offer.redemptionHours && offer.redemptionHours.from && offer.redemptionHours.to) {
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
     const [fh, fm] = offer.redemptionHours.from.split(':').map(Number);
     const [th, tm] = offer.redemptionHours.to.split(':').map(Number);
     const fromMinutes = fh * 60 + fm, toMinutes = th * 60 + tm;
-    if (nowMinutes < fromMinutes || nowMinutes > toMinutes) {
-      return `This offer can only be redeemed between ${offer.redemptionHours.from} and ${offer.redemptionHours.to}.`;
+    if (now.minutesSinceMidnight < fromMinutes || now.minutesSinceMidnight > toMinutes) {
+      return `This offer can only be redeemed between ${offer.redemptionHours.from} and ${offer.redemptionHours.to} (Beirut time).`;
     }
   }
   return null;
@@ -212,12 +269,13 @@ function reviewStats(offerId) {
   return { avgRating: Math.round(avg * 10) / 10, reviewCount: list.length };
 }
 
-function emailTemplate(heading, bodyHtml, baseUrl) {
+function emailTemplate(heading, bodyHtml, baseUrl, headerColors) {
   const logoImg = baseUrl ? `<img src="${baseUrl}/logo.png" alt="Waffer" width="32" height="32" style="border-radius:8px;vertical-align:middle;margin-right:8px;" />` : '';
+  const [c1, c2] = headerColors || ['#3B0F70', '#22063E'];
   return `
   <div style="background:#F7F5FC;padding:30px 16px;font-family:Arial,Helvetica,sans-serif;">
     <div style="max-width:520px;margin:0 auto;background:#FFFFFF;border-radius:12px;overflow:hidden;border:1px solid #E7E1F2;">
-      <div style="background:linear-gradient(135deg, #3B0F70 0%, #22063E 100%);background-color:#3B0F70;padding:22px 28px;">
+      <div style="background:linear-gradient(135deg, ${c1} 0%, ${c2} 100%);background-color:${c1};padding:22px 28px;">
         ${logoImg}<span style="font-size:20px;font-weight:800;color:#FFFFFF;letter-spacing:-0.02em;vertical-align:middle;">Waffer</span>
       </div>
       <div style="padding:28px;color:#1E1033;font-size:14px;line-height:1.6;">
@@ -231,6 +289,16 @@ function emailTemplate(heading, bodyHtml, baseUrl) {
     </div>
   </div>`;
 }
+
+const GIFT_OCCASIONS = {
+  birthday: { emoji: '🎂', label: 'a Birthday gift', c1: '#EC4899', c2: '#9D174D' },
+  anniversary: { emoji: '💜', label: 'an Anniversary gift', c1: '#7C3AED', c2: '#4C1D95' },
+  congratulations: { emoji: '🎉', label: 'a Congratulations gift', c1: '#F5A623', c2: '#B45309' },
+  thankyou: { emoji: '🙏', label: 'a Thank You gift', c1: '#16A34A', c2: '#14532D' },
+  justbecause: { emoji: '💛', label: 'a gift, just because', c1: '#EAB308', c2: '#854D0E' },
+  newjob: { emoji: '🎓', label: 'a New Job / Graduation gift', c1: '#2563EB', c2: '#1E3A8A' },
+  wedding: { emoji: '💍', label: 'a Wedding gift', c1: '#DB2777', c2: '#831843' }
+};
 
 function emailButton(text, link) {
   return `<div style="margin:22px 0;"><a href="${link}" style="background:#FF5722;color:#FFFFFF;text-decoration:none;padding:12px 26px;border-radius:8px;font-weight:700;font-size:14px;display:inline-block;">${text}</a></div>`;
@@ -307,7 +375,7 @@ function publicUser(u) {
 }
 
 function publicMerchant(m) {
-  return { id: m.id, name: m.name, category: m.category, contact: m.contact, logoUrl: m.logoUrl || null };
+  return { id: m.id, name: m.name, category: m.category, contact: m.contact, email: m.email || null, logoUrl: m.logoUrl || null };
 }
 
 function publicMerchantAccount(a, business) {
@@ -381,6 +449,13 @@ app.post('/api/auth/logout', (req, res) => {
 app.get('/api/auth/me', (req, res) => {
   const user = currentUser(req);
   res.json({ user: user ? publicUser(user) : null });
+});
+
+app.get('/api/users/me/stats', requireAuth, (req, res) => {
+  const bought = data.vouchers.filter(v => v.buyerId === req.user.id);
+  const totalBought = bought.length;
+  const totalSaved = money(bought.reduce((a, v) => a + Math.max(0, (v.original || v.price) - v.price), 0));
+  res.json({ totalBought, totalSaved, memberSince: req.user.createdAt });
 });
 
 app.patch('/api/auth/profile', requireAuth, (req, res) => {
@@ -519,9 +594,11 @@ app.get('/api/merchant/recent-redemptions', requireMerchant, (req, res) => {
 });
 
 app.get('/api/merchant/dashboard', requireMerchantManager, (req, res) => {
+  const { from, to } = req.query;
   const myOffers = data.offers.filter(o => o.merchantId === req.merchant.id);
   const myOfferIds = myOffers.map(o => o.id);
-  const myVouchers = data.vouchers.filter(v => myOfferIds.includes(v.offerId));
+  const allMyVouchers = data.vouchers.filter(v => myOfferIds.includes(v.offerId));
+  const myVouchers = allMyVouchers.filter(v => inRange(v.createdAt, from, to));
   const sold = myVouchers.length;
   const redeemed = myVouchers.filter(v => v.status === 'redeemed').length;
   const revenue = money(myVouchers.reduce((a, v) => a + v.price, 0));
@@ -530,18 +607,88 @@ app.get('/api/merchant/dashboard', requireMerchantManager, (req, res) => {
   const payout = money(revenue - commission);
   const offerBreakdown = myOffers.map(o => {
     const ov = myVouchers.filter(v => v.offerId === o.id);
-    return { id: o.id, title: o.title, status: o.status, sold: ov.length, redeemed: ov.filter(v => v.status === 'redeemed').length, revenue: money(ov.length * o.price) };
-  });
-  const recent = myVouchers.map(v => {
+    return { id: o.id, title: o.title, status: o.status, sold: ov.length, redeemed: ov.filter(v => v.status === 'redeemed').length, revenue: money(ov.length * o.price), ...reviewStats(o.id) };
+  }).sort((a, b) => b.revenue - a.revenue);
+  const recent = allMyVouchers.map(v => {
     const buyer = data.users.find(u => u.id === v.buyerId);
     return { code: v.code, offerTitle: v.offerTitle, buyerName: buyer ? buyer.name : 'Unknown', price: v.price, status: v.status, createdAt: v.createdAt, redeemedAt: v.redeemedAt, redeemedByLocation: v.redeemedByLocation || null };
   }).sort((a, b) => b.createdAt - a.createdAt).slice(0, 100);
-  res.json({ sold, redeemed, revenue, commission, payout, commissionRate: currentRate, offers: offerBreakdown, recent });
+  const dailyTrend = buildDailyTrend(myVouchers, from, to);
+  res.json({ sold, redeemed, revenue, commission, payout, commissionRate: currentRate, offers: offerBreakdown, recent, dailyTrend });
 });
 
 app.get('/api/merchant/payouts', requireMerchantManager, (req, res) => {
   const payouts = data.payouts.filter(p => p.merchantId === req.merchant.id).sort((a, b) => b.createdAt - a.createdAt);
   res.json({ payouts, ...merchantOutstanding(req.merchant.id) });
+});
+
+/* ---------- Merchant self-service: branches & profile ----------
+   Every route here scopes strictly to req.merchant.id (from the authenticated
+   session, never a URL param) so a manager can never reach another merchant's
+   accounts or profile even by guessing IDs. Admin retains full access to all
+   of this via the existing /api/admin/merchants/... routes, unchanged. */
+app.get('/api/merchant/accounts', requireMerchantManager, (req, res) => {
+  const accounts = data.merchantAccounts.filter(a => a.merchantId === req.merchant.id).map(a => ({ ...a, passwordHash: undefined }));
+  res.json({ accounts });
+});
+
+app.patch('/api/merchant/accounts/:accountId', requireMerchantManager, (req, res) => {
+  const account = data.merchantAccounts.find(a => a.id === Number(req.params.accountId) && a.merchantId === req.merchant.id);
+  if (!account) return res.status(404).json({ error: 'Account not found.' });
+  if (account.role === 'manager') return res.status(400).json({ error: "The manager account can't be edited here — use Change Password instead." });
+  const { username, password, regenerate } = req.body;
+  if (username && username.trim()) {
+    const newUsername = username.trim().toLowerCase();
+    if (data.merchantAccounts.some(a => a.id !== account.id && a.username === newUsername)) {
+      return res.status(400).json({ error: 'That username is already taken.' });
+    }
+    account.username = newUsername;
+  }
+  let newPlainPassword = null;
+  if (regenerate) {
+    newPlainPassword = generatePassword();
+  } else if (password && password.trim()) {
+    if (password.trim().length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+    newPlainPassword = password.trim();
+  }
+  if (newPlainPassword) {
+    account.passwordHash = bcrypt.hashSync(newPlainPassword, 8);
+    account.plainPassword = newPlainPassword;
+  }
+  db.save();
+  res.json({ account: { ...account, passwordHash: undefined } });
+});
+
+app.delete('/api/merchant/accounts/:accountId', requireMerchantManager, (req, res) => {
+  const account = data.merchantAccounts.find(a => a.id === Number(req.params.accountId) && a.merchantId === req.merchant.id);
+  if (!account) return res.status(404).json({ error: 'Account not found.' });
+  if (account.role === 'manager') return res.status(400).json({ error: "The manager account can't be deleted." });
+  data.merchantAccounts = data.merchantAccounts.filter(a => a.id !== account.id);
+  db.save();
+  res.json({ ok: true });
+});
+
+app.get('/api/merchant/profile', requireMerchantManager, (req, res) => {
+  res.json({ merchant: publicMerchant(req.merchant) });
+});
+
+app.patch('/api/merchant/profile', requireMerchantManager, (req, res) => {
+  const { name, contact, email } = req.body;
+  if (name && name.trim()) req.merchant.name = name.trim();
+  if (contact !== undefined) req.merchant.contact = contact;
+  if (email !== undefined) req.merchant.email = email.trim() || null;
+  db.save();
+  res.json({ merchant: publicMerchant(req.merchant) });
+});
+
+app.post('/api/merchant/profile/logo-upload', requireMerchantManager, (req, res) => {
+  upload.single('logo')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || 'Upload failed.' });
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
+    req.merchant.logoUrl = '/uploads/' + req.file.filename;
+    db.save();
+    res.json({ merchant: publicMerchant(req.merchant) });
+  });
 });
 
 /* ---------- Categories (public read) ---------- */
@@ -552,8 +699,8 @@ app.get('/api/categories', (req, res) => {
 /* ---------- Offers (public read) ---------- */
 app.get('/api/offers', (req, res) => {
   const { category, search, minPrice, maxPrice, sort } = req.query;
-  const now = Date.now();
-  let list = data.offers.filter(o => o.status === 'Live' && (!o.startDate || new Date(o.startDate).getTime() <= now));
+  const todayStr = nowInStoreTimezone().dateStr;
+  let list = data.offers.filter(o => o.status === 'Live' && (!o.startDate || o.startDate <= todayStr));
   if (category && category !== 'All') list = list.filter(o => o.category === category);
   if (search) {
     const s = search.toLowerCase();
@@ -710,13 +857,14 @@ app.post('/api/vouchers/purchase', requireAuth, async (req, res) => {
 });
 
 app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
-  const { offerId, recipientEmail, recipientPhone, message } = req.body;
+  const { offerId, recipientEmail, recipientPhone, message, occasion } = req.body;
   const offer = data.offers.find(o => o.id === Number(offerId));
   const validationError = validateOfferPurchase(offer, req.user.id, 1);
   if (validationError) return res.status(400).json({ error: validationError });
   const email = (recipientEmail || '').trim().toLowerCase();
   const phone = (recipientPhone || '').trim().toLowerCase();
   if (!email && !phone) return res.status(400).json({ error: "Enter the recipient's email or phone number." });
+  const occasionTheme = GIFT_OCCASIONS[occasion] || null;
 
   const recipient = data.users.find(u =>
     (email && u.email && u.email.toLowerCase() === email) ||
@@ -738,16 +886,19 @@ app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
     giftedTo: recipient ? recipient.name : null,
     recipientEmail: recipient ? null : (email || null),
     recipientPhone: recipient ? null : (phone || null),
-    giftMessage: message || null, createdAt: Date.now(), redeemedAt: null,
+    giftMessage: message || null, occasion: occasion || null, createdAt: Date.now(), redeemedAt: null,
     commissionRate: commissionRateFor(merchant)
   };
   data.vouchers.push(voucher);
   offer.sold += 1;
   db.save();
 
+  const headerColors = occasionTheme ? [occasionTheme.c1, occasionTheme.c2] : null;
+  const occasionHeading = occasionTheme ? `You got ${occasionTheme.label}! ${occasionTheme.emoji}` : 'You got a gift! 🎁';
+
   if (recipient && recipient.email) {
     sendEmail(recipient.email, 'You received a Waffer gift!',
-      emailTemplate('You got a gift! 🎁', `
+      emailTemplate(occasionHeading, `
         <p>Hi ${escapeHtml(recipient.name)},</p>
         <p><strong>${escapeHtml(req.user.name)}</strong> sent you a voucher:</p>
         <p style="font-size:16px;font-weight:700;margin:14px 0 4px;">${escapeHtml(offer.title)}</p>
@@ -755,17 +906,17 @@ app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
         ${voucher.giftMessage ? `<div style="background:#FAFAFA;border-radius:8px;padding:12px 16px;margin:14px 0;font-style:italic;color:#1E293B;">"${escapeHtml(voucher.giftMessage)}"</div>` : ''}
         <div style="background:#FAFAFA;border-radius:8px;padding:10px 14px;margin:14px 0;font-family:'Courier New',monospace;font-weight:700;font-size:15px;text-align:center;letter-spacing:1px;">${code}</div>
         <p style="color:#64748B;font-size:12.5px;">Find it anytime in your Waffer wallet.</p>
-      `, originOf(req)));
+      `, originOf(req), headerColors));
   } else if (email) {
     sendEmail(email, "You've received a gift on Waffer!",
-      emailTemplate('Someone sent you a gift! 🎁', `
+      emailTemplate(occasionTheme ? `Someone sent you ${occasionTheme.label}! ${occasionTheme.emoji}` : 'Someone sent you a gift! 🎁', `
         <p><strong>${escapeHtml(req.user.name)}</strong> sent you a voucher:</p>
         <p style="font-size:16px;font-weight:700;margin:14px 0 4px;">${escapeHtml(offer.title)}</p>
         <p style="color:#64748B;margin-top:0;">from ${escapeHtml(voucher.merchantName)}</p>
         ${voucher.giftMessage ? `<div style="background:#FAFAFA;border-radius:8px;padding:12px 16px;margin:14px 0;font-style:italic;color:#1E293B;">"${escapeHtml(voucher.giftMessage)}"</div>` : ''}
         <p>Create a free Waffer account using this email address to claim it:</p>
         ${emailButton('Create my account', `${originOf(req)}/?claimEmail=${encodeURIComponent(email)}`)}
-      `, originOf(req)));
+      `, originOf(req), headerColors));
   }
 
   res.json({ voucher, claimed: !!recipient, recipientName: recipient ? recipient.name : null });
@@ -784,7 +935,8 @@ app.get('/api/vouchers/mine', requireAuth, (req, res) => {
     ...v,
     hasReviewed: data.reviews.some(r => r.offerId === v.offerId && r.userId === req.user.id)
   }));
-  res.json({ vouchers: mine });
+  const totalSaved = money(mine.reduce((a, v) => a + Math.max(0, (v.original || v.price) - v.price), 0));
+  res.json({ vouchers: mine, totalSaved });
 });
 
 app.get('/api/vouchers/sent', requireAuth, (req, res) => {
@@ -883,6 +1035,21 @@ app.post('/api/admin/merchants', requireAdmin, (req, res) => {
   data.merchantAccounts.push(account);
 
   db.save();
+
+  if (merchant.email) {
+    sendEmail(merchant.email, 'Welcome to Waffer — your account is ready',
+      emailTemplate('Welcome to Waffer!', `
+        <p>Hi ${escapeHtml(merchant.name)},</p>
+        <p>Your business is now set up on Waffer. Here's how to log in and manage your offers, redemptions, and payouts:</p>
+        <table style="width:100%;margin:16px 0;border-collapse:collapse;">
+          <tr><td style="padding:6px 0;color:#64748B;">Username</td><td style="padding:6px 0;text-align:right;font-weight:700;">${escapeHtml(username)}</td></tr>
+          <tr><td style="padding:6px 0;color:#64748B;">Password</td><td style="padding:6px 0;text-align:right;font-weight:700;font-family:'Courier New',monospace;">${escapeHtml(tempPassword)}</td></tr>
+        </table>
+        ${emailButton('Log in to Waffer', `${originOf(req)}/`)}
+        <p style="color:#64748B;font-size:12.5px;">Click "Merchant login" on that page and use the details above. We'd recommend changing your password once you're in.</p>
+      `, originOf(req)));
+  }
+
   res.json({ merchant, managerUsername: username, tempPassword });
 });
 
@@ -919,6 +1086,20 @@ app.post('/api/admin/merchants/:id/accounts', requireAdmin, (req, res) => {
   const account = { id: accountId, merchantId, role: 'frontdesk', location: location.trim(), username, passwordHash: bcrypt.hashSync(tempPassword, 8), plainPassword: tempPassword };
   data.merchantAccounts.push(account);
   db.save();
+
+  if (merchant.email) {
+    sendEmail(merchant.email, `New branch account created — ${location.trim()}`,
+      emailTemplate('New branch account', `
+        <p>Hi ${escapeHtml(merchant.name)},</p>
+        <p>A front-desk account was just created for <strong>${escapeHtml(location.trim())}</strong>. Here are the login details to pass along to that branch's staff:</p>
+        <table style="width:100%;margin:16px 0;border-collapse:collapse;">
+          <tr><td style="padding:6px 0;color:#64748B;">Username</td><td style="padding:6px 0;text-align:right;font-weight:700;">${escapeHtml(username)}</td></tr>
+          <tr><td style="padding:6px 0;color:#64748B;">Password</td><td style="padding:6px 0;text-align:right;font-weight:700;font-family:'Courier New',monospace;">${escapeHtml(tempPassword)}</td></tr>
+        </table>
+        <p style="color:#64748B;font-size:12.5px;">Front desk accounts can look up and redeem vouchers, but can't see sales figures. You can manage or reset this account anytime from your Waffer dashboard.</p>
+      `, originOf(req)));
+  }
+
   res.json({ account: { ...account, passwordHash: undefined }, tempPassword });
 });
 
@@ -1052,6 +1233,21 @@ app.post('/api/admin/offers', requireAdmin, (req, res) => {
   };
   data.offers.push(offer);
   db.save();
+
+  if (merchant.email) {
+    const isScheduled = offer.startDate && offer.startDate > nowInStoreTimezone().dateStr;
+    sendEmail(merchant.email, isScheduled ? `Your offer is scheduled — ${offer.title}` : `Your offer is live — ${offer.title}`,
+      emailTemplate(isScheduled ? 'Offer scheduled' : 'Offer is live! 🎉', `
+        <p>Hi ${escapeHtml(merchant.name)},</p>
+        <p>${isScheduled
+          ? `Your new offer is set up and will automatically go live on <strong>${offer.startDate}</strong> (Beirut time):`
+          : `Your new offer is now visible to customers on Waffer:`}</p>
+        <p style="font-size:16px;font-weight:700;margin:14px 0 4px;">${escapeHtml(offer.title)}</p>
+        <p style="color:#64748B;margin-top:0;">$${offer.price} (was $${offer.original})</p>
+        ${emailButton('View your dashboard', `${originOf(req)}/`)}
+      `, originOf(req)));
+  }
+
   res.json({ offer });
 });
 
@@ -1148,11 +1344,23 @@ app.get('/api/admin/finance/overview', requireAdmin, (req, res) => {
     .map(([id, revenue]) => ({ id: Number(id), name: (data.merchants.find(m => m.id === Number(id)) || {}).name || 'Unknown', revenue: money(revenue) }))
     .sort((a, b) => b.revenue - a.revenue).slice(0, 5);
 
+  const offerTotals = {};
+  vouchersInRange.forEach(v => {
+    if (!offerTotals[v.offerId]) offerTotals[v.offerId] = { title: v.offerTitle, revenue: 0, sold: 0 };
+    offerTotals[v.offerId].revenue += v.price;
+    offerTotals[v.offerId].sold += 1;
+  });
+  const topOffers = Object.entries(offerTotals)
+    .map(([id, o]) => ({ id: Number(id), title: o.title, revenue: money(o.revenue), sold: o.sold }))
+    .sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+
+  const dailyTrend = buildDailyTrend(vouchersInRange, from, to);
+
   res.json({
     gmv, commissionTotal, payoutOwedForPeriod, totalOutstandingAllTime,
     vouchersSold: vouchersInRange.length,
     vouchersRedeemed: vouchersInRange.filter(v => v.status === 'redeemed').length,
-    categoryBreakdown, topMerchants
+    categoryBreakdown, topMerchants, topOffers, dailyTrend
   });
 });
 
