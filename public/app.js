@@ -383,7 +383,6 @@ function renderMerchantArea() {
     } else {
       renderFrontDeskView();
     }
-    document.getElementById('merchantPasswordPanel').style.display = currentMerchant.role === 'manager' ? 'block' : 'none';
     const activeView = document.querySelector('.view.active');
     if (activeView && activeView.id === 'view-customer') switchView('merchant');
   } else {
@@ -650,6 +649,15 @@ function renderManagerDashboard() {
         </div>
         <div class="inline-notice" id="mpProfileNotice"></div>
         <button class="btn btn-primary" onclick="saveMerchantProfile()">Save changes</button>
+      </div>
+      <div class="panel">
+        <h3 style="margin-bottom:14px;">Change your password</h3>
+        <div class="two-col">
+          <div class="field"><label>Current password</label><input id="merCurrentPassword" type="password" /></div>
+          <div class="field"><label>New password</label><input id="merNewPassword" type="password" /></div>
+        </div>
+        <div class="inline-notice" id="merPasswordNotice"></div>
+        <button class="btn btn-secondary" onclick="changeMerchantPassword()">Update password</button>
       </div>
     </div>
 
@@ -1137,18 +1145,21 @@ function selectOccasion(id) {
 function startGift() {
   if (!currentUser) { closeModal('offerModal'); openModal('authModal'); return; }
   closeModal('offerModal');
+  window.__giftIdempotencyKey = crypto.randomUUID ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(36).slice(2));
   document.getElementById('giftSummary').innerHTML = `
     <div class="tk-line-item">
       <div class="tk-avatar">${currentOffer.merchantInitials || '??'}</div>
       <div class="info"><div class="t">${currentOffer.title}</div><div class="m">${currentOffer.merchantName}</div></div>
       <strong>$${currentOffer.price}</strong>
     </div>`;
+  document.getElementById('giftTotalFig').textContent = '$' + currentOffer.price;
   document.getElementById('giftEmail').value = '';
   document.getElementById('giftPhone').value = '';
   document.getElementById('giftMessage').value = '';
   document.getElementById('giftMessage').placeholder = 'Happy birthday!';
   document.getElementById('giftLookupNote').textContent = '';
   document.getElementById('giftPreviewPanel').style.display = 'none';
+  document.getElementById('giftPayBtn').disabled = false;
   selectedOccasion = null;
   renderOccasionPicker();
   clearNotice('giftNotice');
@@ -1226,8 +1237,11 @@ async function completeGift() {
     showNotice('giftNotice', "Enter the recipient's email or phone number.", 'error');
     return;
   }
+  const payBtn = document.getElementById('giftPayBtn');
+  if (payBtn.disabled) return;
+  payBtn.disabled = true;
   try {
-    const { claimed, recipientName } = await api('/api/vouchers/gift', { method: 'POST', body: { offerId: currentOffer.id, recipientEmail, recipientPhone, message, occasion: selectedOccasion } });
+    const { claimed, recipientName } = await api('/api/vouchers/gift', { method: 'POST', body: { offerId: currentOffer.id, recipientEmail, recipientPhone, message, occasion: selectedOccasion, idempotencyKey: window.__giftIdempotencyKey } });
     closeModal('giftModal');
     renderOffers();
     if (claimed) {
@@ -1237,6 +1251,7 @@ async function completeGift() {
     }
   } catch (e) {
     showNotice('giftNotice', e.message, 'error');
+    payBtn.disabled = false;
   }
 }
 

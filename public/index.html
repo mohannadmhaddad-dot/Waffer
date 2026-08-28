@@ -114,15 +114,6 @@
     </div>
     <div id="merchantLoggedIn" style="display:none;">
       <div id="merchantLoggedInContent"></div>
-      <div class="panel" id="merchantPasswordPanel">
-        <h3 style="margin-bottom:14px;">Change password</h3>
-        <div class="two-col">
-          <div class="field"><label>Current password</label><input id="merCurrentPassword" type="password" /></div>
-          <div class="field"><label>New password</label><input id="merNewPassword" type="password" /></div>
-        </div>
-        <div class="inline-notice" id="merPasswordNotice"></div>
-        <button class="btn btn-secondary" onclick="changeMerchantPassword()">Update password</button>
-      </div>
       <button class="btn btn-secondary" onclick="doMerchantLogout()">Log out</button>
     </div>
   </section>
@@ -368,9 +359,12 @@
       <div class="tk-field-label" style="margin-top:14px;">Say something (optional)</div>
       <textarea class="tk-message-box" id="giftMessage" placeholder="Happy birthday!" oninput="updateGiftPreview()"></textarea>
       <div class="tk-gift-preview" id="giftPreviewPanel"></div>
+      <div class="tk-pay-label" style="margin-top:16px;">Pay with</div>
+      <div class="tk-pay-option selected"><span style="width:36px;height:24px;border-radius:6px;background:var(--ink);color:var(--gold);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;">whish</span>Whish (simulated for this build)<span style="margin-left:auto;width:18px;height:18px;border-radius:50%;background:var(--ink);color:var(--gold);display:flex;align-items:center;justify-content:center;font-size:10px;">✓</span></div>
+      <div class="tk-total-line">Total<span class="fig" id="giftTotalFig"></span></div>
       <div class="inline-notice" id="giftNotice"></div>
-      <button class="tk-pill" onclick="completeGift()">Send gift</button>
-      <div class="tk-fine">Fill in at least one. If they don't have a Waffer account yet, we'll email them to sign up and claim it.</div>
+      <button class="tk-pill" onclick="completeGift()" id="giftPayBtn">Pay &amp; send gift</button>
+      <div class="tk-fine">Fill in at least one recipient field. If they don't have a Waffer account yet, we'll email them to sign up and claim it.</div>
     </div>
   </div>
 </div>
