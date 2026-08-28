@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const PDFDocument = require('pdfkit');
+const cloudinary = require('cloudinary').v2;
 const db = require('./db');
 
 const app = express();
@@ -18,16 +19,30 @@ function commissionRateFor(merchant) {
   return (merchant && typeof merchant.commissionRate === 'number') ? merchant.commissionRate : DEFAULT_COMMISSION_RATE;
 }
 
-const uploadsDir = path.join(__dirname, 'public', 'uploads');
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+const cloudinaryConfigured = !!(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
+if (cloudinaryConfigured) {
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+  });
+}
+
+/* Uploads an in-memory image buffer to Cloudinary, returning its permanent URL.
+   Unlike local disk storage, this survives every future deploy — nothing to
+   re-upload after a code push, ever again. */
+function uploadToCloudinary(buffer, folder) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream({ folder, resource_type: 'image' }, (err, result) => {
+      if (err) return reject(err);
+      resolve(result);
+    });
+    stream.end(buffer);
+  });
+}
+
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, uploadsDir),
-    filename: (req, file, cb) => {
-      const safe = file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '');
-      cb(null, Date.now() + '-' + safe);
-    }
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 3 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (!file.mimetype.startsWith('image/')) return cb(new Error('Only image files are allowed.'));
@@ -299,6 +314,45 @@ const GIFT_OCCASIONS = {
   newjob: { emoji: '🎓', label: 'a New Job / Graduation gift', c1: '#2563EB', c2: '#1E3A8A' },
   wedding: { emoji: '💍', label: 'a Wedding gift', c1: '#DB2777', c2: '#831843' }
 };
+
+/* A dedicated card-style layout used only for gift emails — deliberately not the
+   plain transactional emailTemplate() used for receipts/resets/etc. Meant to feel
+   like opening an actual gift card, not a notification: a hero banner themed to
+   the chosen occasion, a dashed "ticket" perforation, and the code presented like
+   a real voucher stub rather than a line of text. */
+function giftEmailCard({ occasionTheme, senderName, offerTitle, merchantName, giftMessage, code, ctaText, ctaLink, greetingName, baseUrl }) {
+  const theme = occasionTheme || { emoji: '🎁', label: null, c1: '#3B0F70', c2: '#22063E' };
+  const logoImg = baseUrl ? `<img src="${baseUrl}/logo.png" width="26" height="26" style="border-radius:7px;vertical-align:middle;margin-right:6px;" alt="Waffer" />` : '';
+  return `
+  <div style="background:#F7F5FC;padding:30px 16px;font-family:Arial,Helvetica,sans-serif;">
+    <div style="max-width:480px;margin:0 auto;">
+      <div style="text-align:center;margin-bottom:16px;">${logoImg}<span style="font-size:15px;font-weight:800;color:#3B0F70;vertical-align:middle;">Waffer</span></div>
+      <div style="background:#FFFFFF;border-radius:20px;overflow:hidden;box-shadow:0 6px 24px rgba(59,15,112,0.14);">
+        <div style="background:linear-gradient(135deg, ${theme.c1} 0%, ${theme.c2} 100%);background-color:${theme.c1};padding:36px 24px 30px;text-align:center;">
+          <div style="font-size:50px;line-height:1;margin-bottom:10px;">${theme.emoji}</div>
+          <div style="color:#FFFFFF;font-size:20px;font-weight:800;">${theme.label ? 'You got ' + theme.label + '!' : 'You got a gift!'}</div>
+          <div style="color:rgba(255,255,255,0.85);font-size:13px;margin-top:6px;">from ${escapeHtml(senderName)}</div>
+        </div>
+        <div style="border-top:2px dashed #E7E1F2;"></div>
+        <div style="padding:26px 28px 28px;">
+          ${greetingName ? `<p style="margin:0 0 14px;color:#1E1033;font-size:14px;">Hi ${escapeHtml(greetingName)},</p>` : ''}
+          <div style="font-size:18px;font-weight:800;color:#1E1033;margin-bottom:4px;">${escapeHtml(offerTitle)}</div>
+          <div style="color:#6B6280;font-size:13.5px;margin-bottom:16px;">${escapeHtml(merchantName)}</div>
+          ${giftMessage ? `<div style="background:#F7F5FC;border-radius:12px;padding:14px 16px;margin-bottom:18px;font-style:italic;color:#1E1033;font-size:14px;">"${escapeHtml(giftMessage)}"</div>` : ''}
+          <div style="background:#1E1033;border-radius:12px;padding:16px;text-align:center;margin-bottom:20px;">
+            <div style="color:rgba(255,255,255,0.6);font-size:10.5px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Voucher code</div>
+            <div style="color:#FFC020;font-family:'Courier New',monospace;font-weight:800;font-size:19px;letter-spacing:3px;">${code}</div>
+          </div>
+          <a href="${ctaLink}" style="display:block;text-align:center;background:#F5A623;color:#FFFFFF;text-decoration:none;padding:14px;border-radius:12px;font-weight:800;font-size:14.5px;">${ctaText}</a>
+        </div>
+      </div>
+      <div style="text-align:center;color:#9A8F7C;font-size:11px;margin-top:18px;line-height:1.6;">
+        Waffer — discount vouchers from local businesses in Lebanon.<br/>
+        This is an automated message, please don't reply directly to this email.
+      </div>
+    </div>
+  </div>`;
+}
 
 function emailButton(text, link) {
   return `<div style="margin:22px 0;"><a href="${link}" style="background:#FF5722;color:#FFFFFF;text-decoration:none;padding:12px 26px;border-radius:8px;font-weight:700;font-size:14px;display:inline-block;">${text}</a></div>`;
@@ -682,12 +736,18 @@ app.patch('/api/merchant/profile', requireMerchantManager, (req, res) => {
 });
 
 app.post('/api/merchant/profile/logo-upload', requireMerchantManager, (req, res) => {
-  upload.single('logo')(req, res, (err) => {
+  upload.single('logo')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message || 'Upload failed.' });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
-    req.merchant.logoUrl = '/uploads/' + req.file.filename;
-    db.save();
-    res.json({ merchant: publicMerchant(req.merchant) });
+    if (!cloudinaryConfigured) return res.status(503).json({ error: 'Image uploads are not configured yet.' });
+    try {
+      const result = await uploadToCloudinary(req.file.buffer, 'waffer/merchant-logos');
+      req.merchant.logoUrl = result.secure_url;
+      db.save();
+      res.json({ merchant: publicMerchant(req.merchant) });
+    } catch (e) {
+      res.status(502).json({ error: 'Upload failed: ' + e.message });
+    }
   });
 });
 
@@ -857,7 +917,10 @@ app.post('/api/vouchers/purchase', requireAuth, async (req, res) => {
 });
 
 app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
-  const { offerId, recipientEmail, recipientPhone, message, occasion } = req.body;
+  const { offerId, recipientEmail, recipientPhone, message, occasion, idempotencyKey } = req.body;
+  const cached = checkIdempotency(req.user.id, idempotencyKey);
+  if (cached) return res.json(cached);
+
   const offer = data.offers.find(o => o.id === Number(offerId));
   const validationError = validateOfferPurchase(offer, req.user.id, 1);
   if (validationError) return res.status(400).json({ error: validationError });
@@ -875,6 +938,15 @@ app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
   }
 
   const merchant = data.merchants.find(m => m.id === offer.merchantId) || {};
+
+  const paymentResult = await paymentProvider.createPayment({
+    amount: offer.price, currency: 'USD', customerId: req.user.id,
+    metadata: { offerId: offer.id, gift: true }
+  });
+  if (!paymentResult.success) {
+    return res.status(402).json({ error: 'Payment failed. Please try again.' });
+  }
+
   const discountPct = Math.round((1 - offer.price / offer.original) * 100);
   const code = genVoucherCode();
   const voucher = {
@@ -887,39 +959,45 @@ app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
     recipientEmail: recipient ? null : (email || null),
     recipientPhone: recipient ? null : (phone || null),
     giftMessage: message || null, occasion: occasion || null, createdAt: Date.now(), redeemedAt: null,
-    commissionRate: commissionRateFor(merchant)
+    commissionRate: commissionRateFor(merchant), paymentTransactionId: paymentResult.transactionId
   };
   data.vouchers.push(voucher);
   offer.sold += 1;
   db.save();
 
-  const headerColors = occasionTheme ? [occasionTheme.c1, occasionTheme.c2] : null;
-  const occasionHeading = occasionTheme ? `You got ${occasionTheme.label}! ${occasionTheme.emoji}` : 'You got a gift! 🎁';
+  sendEmail(req.user.email, 'Your Waffer gift purchase confirmation',
+    emailTemplate('Gift sent 🎁', `
+      <p>Hi ${escapeHtml(req.user.name)},</p>
+      <p>Here's your receipt for the gift you just sent:</p>
+      <table style="width:100%;margin:16px 0;border-collapse:collapse;">
+        <tr><td style="padding:6px 0;color:#64748B;">Offer</td><td style="padding:6px 0;text-align:right;font-weight:700;">${escapeHtml(offer.title)}</td></tr>
+        <tr><td style="padding:6px 0;color:#64748B;">Merchant</td><td style="padding:6px 0;text-align:right;">${escapeHtml(merchant.name) || 'the merchant'}</td></tr>
+        <tr><td style="padding:6px 0;color:#64748B;">Sent to</td><td style="padding:6px 0;text-align:right;">${recipient ? escapeHtml(recipient.name) : escapeHtml(email || phone)}</td></tr>
+        <tr><td style="padding:8px 0;color:#1E1033;font-weight:700;border-top:1px solid #E7E1F2;">Total charged</td><td style="padding:8px 0;text-align:right;font-weight:800;border-top:1px solid #E7E1F2;">$${offer.price}</td></tr>
+      </table>
+      <p style="color:#64748B;font-size:12.5px;">The recipient's email only shows the gift itself — never this price.</p>
+    `, originOf(req)));
 
   if (recipient && recipient.email) {
     sendEmail(recipient.email, 'You received a Waffer gift!',
-      emailTemplate(occasionHeading, `
-        <p>Hi ${escapeHtml(recipient.name)},</p>
-        <p><strong>${escapeHtml(req.user.name)}</strong> sent you a voucher:</p>
-        <p style="font-size:16px;font-weight:700;margin:14px 0 4px;">${escapeHtml(offer.title)}</p>
-        <p style="color:#64748B;margin-top:0;">from ${escapeHtml(voucher.merchantName)}</p>
-        ${voucher.giftMessage ? `<div style="background:#FAFAFA;border-radius:8px;padding:12px 16px;margin:14px 0;font-style:italic;color:#1E293B;">"${escapeHtml(voucher.giftMessage)}"</div>` : ''}
-        <div style="background:#FAFAFA;border-radius:8px;padding:10px 14px;margin:14px 0;font-family:'Courier New',monospace;font-weight:700;font-size:15px;text-align:center;letter-spacing:1px;">${code}</div>
-        <p style="color:#64748B;font-size:12.5px;">Find it anytime in your Waffer wallet.</p>
-      `, originOf(req), headerColors));
+      giftEmailCard({
+        occasionTheme, senderName: req.user.name, offerTitle: offer.title, merchantName: voucher.merchantName,
+        giftMessage: voucher.giftMessage, code, ctaText: 'View in my wallet', ctaLink: originOf(req) + '/',
+        greetingName: recipient.name, baseUrl: originOf(req)
+      }));
   } else if (email) {
     sendEmail(email, "You've received a gift on Waffer!",
-      emailTemplate(occasionTheme ? `Someone sent you ${occasionTheme.label}! ${occasionTheme.emoji}` : 'Someone sent you a gift! 🎁', `
-        <p><strong>${escapeHtml(req.user.name)}</strong> sent you a voucher:</p>
-        <p style="font-size:16px;font-weight:700;margin:14px 0 4px;">${escapeHtml(offer.title)}</p>
-        <p style="color:#64748B;margin-top:0;">from ${escapeHtml(voucher.merchantName)}</p>
-        ${voucher.giftMessage ? `<div style="background:#FAFAFA;border-radius:8px;padding:12px 16px;margin:14px 0;font-style:italic;color:#1E293B;">"${escapeHtml(voucher.giftMessage)}"</div>` : ''}
-        <p>Create a free Waffer account using this email address to claim it:</p>
-        ${emailButton('Create my account', `${originOf(req)}/?claimEmail=${encodeURIComponent(email)}`)}
-      `, originOf(req), headerColors));
+      giftEmailCard({
+        occasionTheme, senderName: req.user.name, offerTitle: offer.title, merchantName: voucher.merchantName,
+        giftMessage: voucher.giftMessage, code, ctaText: 'Create my account to claim it',
+        ctaLink: `${originOf(req)}/?claimEmail=${encodeURIComponent(email)}`,
+        greetingName: null, baseUrl: originOf(req)
+      }));
   }
 
-  res.json({ voucher, claimed: !!recipient, recipientName: recipient ? recipient.name : null });
+  const responseBody = { voucher, claimed: !!recipient, recipientName: recipient ? recipient.name : null };
+  saveIdempotency(req.user.id, idempotencyKey, responseBody);
+  res.json(responseBody);
 });
 
 app.get('/api/users/lookup', requireAuth, (req, res) => {
@@ -1162,26 +1240,38 @@ app.patch('/api/admin/merchants/:id/logo', requireAdmin, (req, res) => {
 });
 
 app.post('/api/admin/merchants/:id/logo-upload', requireAdmin, (req, res) => {
-  upload.single('logo')(req, res, (err) => {
+  upload.single('logo')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message || 'Upload failed.' });
     const merchant = data.merchants.find(m => m.id === Number(req.params.id));
     if (!merchant) return res.status(404).json({ error: 'Merchant not found.' });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
-    merchant.logoUrl = '/uploads/' + req.file.filename;
-    db.save();
-    res.json({ merchant });
+    if (!cloudinaryConfigured) return res.status(503).json({ error: 'Image uploads are not configured yet.' });
+    try {
+      const result = await uploadToCloudinary(req.file.buffer, 'waffer/merchant-logos');
+      merchant.logoUrl = result.secure_url;
+      db.save();
+      res.json({ merchant });
+    } catch (e) {
+      res.status(502).json({ error: 'Upload failed: ' + e.message });
+    }
   });
 });
 
 app.post('/api/admin/offers/:id/image-upload', requireAdmin, (req, res) => {
-  upload.single('image')(req, res, (err) => {
+  upload.single('image')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message || 'Upload failed.' });
     const offer = data.offers.find(o => o.id === Number(req.params.id));
     if (!offer) return res.status(404).json({ error: 'Offer not found.' });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
-    offer.imageUrl = '/uploads/' + req.file.filename;
-    db.save();
-    res.json({ offer });
+    if (!cloudinaryConfigured) return res.status(503).json({ error: 'Image uploads are not configured yet.' });
+    try {
+      const result = await uploadToCloudinary(req.file.buffer, 'waffer/offer-photos');
+      offer.imageUrl = result.secure_url;
+      db.save();
+      res.json({ offer });
+    } catch (e) {
+      res.status(502).json({ error: 'Upload failed: ' + e.message });
+    }
   });
 });
 
