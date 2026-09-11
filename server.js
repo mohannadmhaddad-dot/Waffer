@@ -41,6 +41,114 @@ function uploadToCloudinary(buffer, folder) {
   });
 }
 
+const googleConfigured = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+const facebookConfigured = !!(process.env.FACEBOOK_APP_ID && process.env.FACEBOOK_APP_SECRET);
+
+/* Finds an existing user by email (linking a social login to an account that
+   may already exist from regular email/password signup) or creates a new one.
+   Social-created accounts have no password and no phone number — both are
+   optional here since neither provider reliably supplies a phone number, and
+   forcing one through a post-OAuth form would add real friction for little
+   benefit; the user can add a phone later from their profile if they want to
+   use phone-based gifting. */
+function findOrCreateSocialUser(email, name, provider, providerId) {
+  let user = data.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  if (user) {
+    if (provider === 'google' && !user.googleId) user.googleId = providerId;
+    if (provider === 'facebook' && !user.facebookId) user.facebookId = providerId;
+    db.save();
+    return user;
+  }
+  const id = db.nextId('user');
+  user = {
+    id, name: name || email.split('@')[0], email, phone: null, passwordHash: null,
+    isAdmin: false, createdAt: Date.now(), gender: null, birthday: null,
+    resetToken: null, resetTokenExpiry: null, emailVerified: true, verifyToken: null,
+    authProvider: provider, googleId: provider === 'google' ? providerId : null,
+    facebookId: provider === 'facebook' ? providerId : null
+  };
+  data.users.push(user);
+  db.save();
+  return user;
+}
+
+app.get('/api/auth/google', (req, res) => {
+  if (!googleConfigured) return res.status(503).send('Google sign-in is not configured yet.');
+  const state = crypto.randomBytes(16).toString('hex');
+  req.session.oauthState = state;
+  const redirectUri = `${originOf(req)}/api/auth/google/callback`;
+  const params = new URLSearchParams({
+    client_id: process.env.GOOGLE_CLIENT_ID, redirect_uri: redirectUri, response_type: 'code',
+    scope: 'openid email profile', state, prompt: 'select_account'
+  });
+  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
+});
+
+app.get('/api/auth/google/callback', async (req, res) => {
+  if (!googleConfigured) return res.status(503).send('Google sign-in is not configured yet.');
+  const { code, state } = req.query;
+  if (!code || !state || state !== req.session.oauthState) return res.redirect('/?authError=google');
+  req.session.oauthState = null;
+  try {
+    const redirectUri = `${originOf(req)}/api/auth/google/callback`;
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code, client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        redirect_uri: redirectUri, grant_type: 'authorization_code'
+      })
+    });
+    const tokenJson = await tokenRes.json();
+    if (!tokenJson.access_token) return res.redirect('/?authError=google');
+    const profileRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${tokenJson.access_token}` }
+    });
+    const profile = await profileRes.json();
+    if (!profile.email) return res.redirect('/?authError=google');
+    const user = findOrCreateSocialUser(profile.email, profile.name, 'google', profile.sub);
+    req.session.userId = user.id;
+    res.redirect('/');
+  } catch (e) {
+    res.redirect('/?authError=google');
+  }
+});
+
+app.get('/api/auth/facebook', (req, res) => {
+  if (!facebookConfigured) return res.status(503).send('Facebook sign-in is not configured yet.');
+  const state = crypto.randomBytes(16).toString('hex');
+  req.session.oauthState = state;
+  const redirectUri = `${originOf(req)}/api/auth/facebook/callback`;
+  const params = new URLSearchParams({
+    client_id: process.env.FACEBOOK_APP_ID, redirect_uri: redirectUri, state, scope: 'email,public_profile'
+  });
+  res.redirect(`https://www.facebook.com/v19.0/dialog/oauth?${params.toString()}`);
+});
+
+app.get('/api/auth/facebook/callback', async (req, res) => {
+  if (!facebookConfigured) return res.status(503).send('Facebook sign-in is not configured yet.');
+  const { code, state } = req.query;
+  if (!code || !state || state !== req.session.oauthState) return res.redirect('/?authError=facebook');
+  req.session.oauthState = null;
+  try {
+    const redirectUri = `${originOf(req)}/api/auth/facebook/callback`;
+    const tokenParams = new URLSearchParams({
+      client_id: process.env.FACEBOOK_APP_ID, client_secret: process.env.FACEBOOK_APP_SECRET,
+      redirect_uri: redirectUri, code
+    });
+    const tokenRes = await fetch(`https://graph.facebook.com/v19.0/oauth/access_token?${tokenParams.toString()}`);
+    const tokenJson = await tokenRes.json();
+    if (!tokenJson.access_token) return res.redirect('/?authError=facebook');
+    const profileRes = await fetch(`https://graph.facebook.com/me?fields=id,name,email&access_token=${tokenJson.access_token}`);
+    const profile = await profileRes.json();
+    if (!profile.email) return res.redirect('/?authError=facebook_no_email');
+    const user = findOrCreateSocialUser(profile.email, profile.name, 'facebook', profile.id);
+    req.session.userId = user.id;
+    res.redirect('/');
+  } catch (e) {
+    res.redirect('/?authError=facebook');
+  }
+});
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 3 * 1024 * 1024 },
@@ -277,6 +385,13 @@ function escapeHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
+/* Deliberately simple RFC-5322-ish check — not exhaustive, but enough to catch
+   "just a name with no @/domain" and similar obviously-invalid input, without
+   being so strict it rejects real addresses. */
+function isValidEmail(str) {
+  return typeof str === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(str.trim());
+}
+
 function reviewStats(offerId) {
   const list = data.reviews.filter(r => r.offerId === offerId);
   if (list.length === 0) return { avgRating: null, reviewCount: 0 };
@@ -447,6 +562,9 @@ app.post('/api/auth/register', registerLimiter, (req, res) => {
   if (!name || !email || !password || !phone) {
     return res.status(400).json({ error: 'Name, email, phone and password are required.' });
   }
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: 'Enter a valid email address (e.g. name@example.com).' });
+  }
   if (data.users.some(u => u.email.toLowerCase() === email.toLowerCase())) {
     return res.status(400).json({ error: 'An account with that email already exists.' });
   }
@@ -488,7 +606,10 @@ app.post('/api/auth/register', registerLimiter, (req, res) => {
 app.post('/api/auth/login', authLimiter, (req, res) => {
   const { email, password } = req.body;
   const user = data.users.find(u => u.email.toLowerCase() === (email || '').toLowerCase());
-  if (!user || !bcrypt.compareSync(password || '', user.passwordHash)) {
+  if (!user || !user.passwordHash || !bcrypt.compareSync(password || '', user.passwordHash)) {
+    if (user && !user.passwordHash) {
+      return res.status(400).json({ error: `This account signs in with ${user.authProvider === 'google' ? 'Google' : 'Facebook'}. Use that button instead.` });
+    }
     return res.status(400).json({ error: 'Incorrect email or password.' });
   }
   req.session.userId = user.id;
@@ -728,6 +849,9 @@ app.get('/api/merchant/profile', requireMerchantManager, (req, res) => {
 
 app.patch('/api/merchant/profile', requireMerchantManager, (req, res) => {
   const { name, contact, email } = req.body;
+  if (email !== undefined && email.trim() && !isValidEmail(email)) {
+    return res.status(400).json({ error: 'Enter a valid email address (e.g. name@example.com).' });
+  }
   if (name && name.trim()) req.merchant.name = name.trim();
   if (contact !== undefined) req.merchant.contact = contact;
   if (email !== undefined) req.merchant.email = email.trim() || null;
@@ -1100,6 +1224,9 @@ app.get('/api/admin/merchants', requireAdmin, (req, res) => {
 app.post('/api/admin/merchants', requireAdmin, (req, res) => {
   const { name, category, contact, logoUrl, email } = req.body;
   if (!name || !category || !contact) return res.status(400).json({ error: 'Name, category and contact are required.' });
+  if (email && email.trim() && !isValidEmail(email)) {
+    return res.status(400).json({ error: 'Enter a valid email address (e.g. name@example.com).' });
+  }
   const id = db.nextId('merchant');
   const merchant = { id, name, category, contact, initials: name.slice(0, 2).toUpperCase(), logoUrl: logoUrl || null, email: email || null, commissionRate: null };
   data.merchants.push(merchant);
@@ -1135,6 +1262,9 @@ app.patch('/api/admin/merchants/:id', requireAdmin, (req, res) => {
   const merchant = data.merchants.find(m => m.id === Number(req.params.id));
   if (!merchant) return res.status(404).json({ error: 'Merchant not found.' });
   const { name, category, contact, email } = req.body;
+  if (email !== undefined && email.trim() && !isValidEmail(email)) {
+    return res.status(400).json({ error: 'Enter a valid email address (e.g. name@example.com).' });
+  }
   if (name && name.trim()) merchant.name = name.trim();
   if (category) merchant.category = category;
   if (contact !== undefined) merchant.contact = contact;
