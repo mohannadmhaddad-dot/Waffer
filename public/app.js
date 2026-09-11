@@ -1915,6 +1915,7 @@ document.getElementById('aiQuery').addEventListener('keyup', (e) => { if (e.key 
   const resetToken = params.get('resetToken');
   const verifyToken = params.get('verifyToken');
   const claimEmail = params.get('claimEmail');
+  const authError = params.get('authError');
   if (resetToken) {
     window.__resetToken = resetToken;
     openModal('resetPasswordModal');
@@ -1932,6 +1933,14 @@ document.getElementById('aiQuery').addEventListener('keyup', (e) => { if (e.key 
     setAuthTab('register');
     document.getElementById('regEmail').value = decodeURIComponent(claimEmail);
     toast('Create your account with this email to claim your gift!', 'success');
+    history.replaceState({}, '', location.pathname);
+  } else if (authError) {
+    const messages = {
+      google: 'Google sign-in didn\'t go through. Please try again.',
+      facebook: 'Facebook sign-in didn\'t go through. Please try again.',
+      facebook_no_email: 'Your Facebook account has no email on file, so we can\'t use it to sign in. Try Google or email instead.'
+    };
+    toast(messages[authError] || 'Sign-in didn\'t go through. Please try again.', 'error');
     history.replaceState({}, '', location.pathname);
   }
 })();
