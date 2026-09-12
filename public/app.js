@@ -117,6 +117,10 @@ function fmtDateTime(ts) {
   return `${datePart}, ${timePart}`;
 }
 
+function beirutTodayStr() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Beirut', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+
 /* Shared trend chart used by both admin overview and merchant dashboard.
    No charting library — a plain set of bars scaled to the highest value in range. */
 function renderTrendChart(containerId, data, valueKey) {
@@ -267,12 +271,12 @@ async function doRegister() {
     const gender = document.getElementById('regGender').value;
     const birthday = document.getElementById('regBirthday').value;
     if (!name || !email || !phone || !password) { showNotice('registerNotice', 'Fill in name, email, mobile number and password.', 'error'); return; }
-    const { user, claimedGifts } = await api('/api/auth/register', { method: 'POST', body: { name, email, phone, countryCode, password, gender, birthday } });
+    const { user, pendingGifts } = await api('/api/auth/register', { method: 'POST', body: { name, email, phone, countryCode, password, gender, birthday } });
     currentUser = user;
     renderAuthArea();
     closeModal('authModal');
-    if (claimedGifts > 0) {
-      toast(`Welcome! You had ${claimedGifts} gift voucher${claimedGifts > 1 ? 's' : ''} waiting for you — check "My vouchers".`, 'success');
+    if (pendingGifts > 0) {
+      toast(`Welcome! ${pendingGifts} gift voucher${pendingGifts > 1 ? 's are' : ' is'} waiting for you — verify your email to claim ${pendingGifts > 1 ? 'them' : 'it'}.`, 'success');
     } else {
       toast('Account created. Check your email to verify your address.', 'success');
     }
@@ -283,8 +287,12 @@ async function doRegister() {
 
 async function doLogout() {
   await api('/api/auth/logout', { method: 'POST' });
+  /* The server destroys the whole session, so a browser signed in as both a
+     customer and a merchant loses both — the UI has to agree. */
   currentUser = null;
+  currentMerchant = null;
   renderAuthArea();
+  renderMerchantArea();
   switchView('customer');
 }
 
@@ -377,7 +385,7 @@ function renderMerchantArea() {
     merchantNavBtn.style.display = 'inline-block';
     customerNavBtn.style.display = 'none';
     document.getElementById('walletNavBtn').style.display = 'none';
-    merchantAuthArea.innerHTML = `<span class="merchant-badge">${currentMerchant.merchantName}${currentMerchant.location ? ' — ' + currentMerchant.location : ''}</span>`;
+    merchantAuthArea.innerHTML = `<span class="merchant-badge">${escapeHtml(currentMerchant.merchantName)}${currentMerchant.location ? ' — ' + escapeHtml(currentMerchant.location) : ''}</span>`;
     if (currentMerchant.role === 'manager') {
       renderManagerDashboard();
     } else {
@@ -407,7 +415,7 @@ function opRedeemPanel(subLabel) {
       <div class="op-redeem-head">
         <div class="op-redeem-title-row">
           <img src="logo.png" alt="Waffer" />
-          <div><div class="op-redeem-title">Redeem</div><div class="op-redeem-sub">${currentMerchant.merchantName} · ${subLabel}</div></div>
+          <div><div class="op-redeem-title">Redeem</div><div class="op-redeem-sub">${escapeHtml(currentMerchant.merchantName)} · ${escapeHtml(subLabel)}</div></div>
         </div>
         <div class="op-redeem-badges">
           <span class="op-count-badge" id="opTodayCount">Today: 0 redeemed</span>
@@ -453,7 +461,7 @@ async function opCheckCode() {
       resultEl.innerHTML = `
         <div class="op-result-card error">
           <div class="op-result-eyebrow">Already redeemed</div>
-          <div class="op-result-title">${voucher.offerTitle}</div>
+          <div class="op-result-title">${escapeHtml(voucher.offerTitle)}</div>
           <div class="op-result-meta">${escapeHtml(voucher.buyerName)} · redeemed ${fmtDateTime(voucher.redeemedAt)}</div>
         </div>`;
       return;
@@ -462,34 +470,35 @@ async function opCheckCode() {
       resultEl.innerHTML = `
         <div class="op-result-card error">
           <div class="op-result-eyebrow">Not claimed yet</div>
-          <div class="op-result-title">${voucher.offerTitle}</div>
+          <div class="op-result-title">${escapeHtml(voucher.offerTitle)}</div>
           <div class="op-result-meta">This gift hasn't been claimed by its recipient yet.</div>
         </div>`;
       return;
     }
-    const expired = voucher.expiryDate && new Date(voucher.expiryDate) < new Date();
+    const todayStr = beirutTodayStr();
+    const expired = voucher.expiryDate && voucher.expiryDate < todayStr;
     if (expired) {
       resultEl.innerHTML = `
         <div class="op-result-card error">
           <div class="op-result-eyebrow">Expired</div>
-          <div class="op-result-title">${voucher.offerTitle}</div>
-          <div class="op-result-meta">${escapeHtml(voucher.buyerName)} · expired ${voucher.expiryDate}</div>
+          <div class="op-result-title">${escapeHtml(voucher.offerTitle)}</div>
+          <div class="op-result-meta">${escapeHtml(voucher.buyerName)} · expired ${escapeHtml(voucher.expiryDate)}</div>
         </div>`;
       return;
     }
     resultEl.innerHTML = `
       <div class="op-result-card valid">
         <div class="op-result-eyebrow">Valid · not used before</div>
-        <div class="op-result-title">${voucher.offerTitle}</div>
+        <div class="op-result-title">${escapeHtml(voucher.offerTitle)}</div>
         <div class="op-result-meta">${escapeHtml(voucher.buyerName)} · bought ${fmtDate(voucher.createdAt)}${voucher.expiryDate ? ' · expires ' + fmtDate(voucher.expiryDate) : ''}</div>
-        ${voucher.terms ? `<div class="op-result-terms">${voucher.terms}</div>` : ''}
-        <button class="op-redeem-confirm-btn" onclick="opConfirmRedeem('${voucher.code}')">Mark as redeemed</button>
+        ${voucher.terms ? `<div class="op-result-terms">${escapeHtml(voucher.terms)}</div>` : ''}
+        <button class="op-redeem-confirm-btn" onclick="opConfirmRedeem('${esc(voucher.code)}')">Mark as redeemed</button>
       </div>`;
   } catch (e) {
     resultEl.innerHTML = `
       <div class="op-result-card error">
         <div class="op-result-eyebrow">Not found</div>
-        <div class="op-result-title" style="font-size:17px;">${e.message}</div>
+        <div class="op-result-title" style="font-size:17px;">${escapeHtml(e.message)}</div>
       </div>`;
   }
 }
@@ -521,8 +530,8 @@ async function loadRecentRedemptions() {
       ? `<div style="font-size:12.5px;color:rgba(255,255,255,0.5);">No redemptions yet.</div>`
       : redemptions.map(r => `
         <div class="op-log-row">
-          <span class="op-log-code">${r.code}</span>
-          <span class="op-log-meta">${new Date(r.redeemedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}${r.redeemedByUsername ? ' · ' + r.redeemedByUsername : ''}</span>
+          <span class="op-log-code">${escapeHtml(r.code)}</span>
+          <span class="op-log-meta">${new Date(r.redeemedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}${r.redeemedByUsername ? ' · ' + escapeHtml(r.redeemedByUsername) : ''}</span>
         </div>
       `).join('');
   } catch (e) { /* ignore */ }
@@ -553,8 +562,8 @@ async function opBulkRedeem() {
     <div style="font-size:12.5px;color:rgba(255,255,255,0.85);margin-bottom:8px;font-weight:700;">${successCount} of ${results.length} redeemed</div>
     ${results.map(r => `
       <div class="op-log-row">
-        <span class="op-log-code">${r.code}</span>
-        <span class="op-log-meta" style="color:${r.ok ? '#86EFAC' : '#FCA5A5'};">${r.ok ? 'Redeemed' : r.error}</span>
+        <span class="op-log-code">${escapeHtml(r.code)}</span>
+        <span class="op-log-meta" style="color:${r.ok ? '#86EFAC' : '#FCA5A5'};">${r.ok ? 'Redeemed' : escapeHtml(r.error)}</span>
       </div>
     `).join('')}
   `;
@@ -568,7 +577,7 @@ async function opBulkRedeem() {
 function renderManagerDashboard() {
   const el = document.getElementById('merchantLoggedInContent');
   el.innerHTML = `
-    <h2>${currentMerchant.merchantName} — Dashboard</h2>
+    <h2>${escapeHtml(currentMerchant.merchantName)} — Dashboard</h2>
     <div class="mini-tabs" style="max-width:640px;flex-wrap:wrap;">
       <button class="active" data-mtab="overview" onclick="setMerchantTab('overview')">Overview</button>
       <button data-mtab="offers" onclick="setMerchantTab('offers')">Offers</button>
@@ -695,10 +704,10 @@ async function loadMerchantOverview() {
     document.getElementById('mdCommissionNote').textContent = `Your current commission rate is ${Math.round(d.commissionRate * 100)}%. Total commission deducted (at the rate active for each sale): $${d.commission}.`;
     renderTrendChart('mdTrendChart', d.dailyTrend, 'gmv');
     document.getElementById('mdOffersTable').innerHTML = d.offers.map(o =>
-      `<tr><td>${escapeHtml(o.title)}</td><td>${o.status}</td><td>${o.sold}</td><td>${o.redeemed}</td><td>$${o.revenue}</td><td>${o.reviewCount ? starString(o.avgRating) + ' (' + o.reviewCount + ')' : '—'}</td></tr>`
+      `<tr><td>${escapeHtml(o.title)}</td><td>${escapeHtml(o.status)}</td><td>${o.sold}</td><td>${o.redeemed}</td><td>$${o.revenue}</td><td>${o.reviewCount ? starString(o.avgRating) + ' (' + o.reviewCount + ')' : '—'}</td></tr>`
     ).join('') || `<tr><td colspan="6" class="empty">No offers yet.</td></tr>`;
     document.getElementById('mdRecentTable').innerHTML = d.recent.map(v =>
-      `<tr><td class="voucher-code">${v.code}</td><td>${escapeHtml(v.buyerName)}</td><td>$${v.price}</td><td><span class="status-pill status-${v.status}">${v.status}</span></td><td>${fmtDateTime(v.createdAt)}</td><td>${fmtDateTime(v.redeemedAt)}</td><td>${v.redeemedByLocation || '—'}</td></tr>`
+      `<tr><td class="voucher-code">${escapeHtml(v.code)}</td><td>${escapeHtml(v.buyerName)}</td><td>$${v.price}</td><td><span class="status-pill status-${escapeHtml(v.status)}">${escapeHtml(v.status)}</span></td><td>${fmtDateTime(v.createdAt)}</td><td>${fmtDateTime(v.redeemedAt)}</td><td>${escapeHtml(v.redeemedByLocation || '—')}</td></tr>`
     ).join('') || `<tr><td colspan="7" class="empty">No sales yet.</td></tr>`;
   } catch (e) {
     console.log('dashboard load failed', e.message);
@@ -711,7 +720,7 @@ async function loadMerchantPayouts() {
     document.getElementById('mpOutstanding').textContent = '$' + d.outstanding;
     document.getElementById('mpTotalPaid').textContent = '$' + d.totalPaid;
     document.getElementById('mpHistoryTable').innerHTML = d.payouts.map(p =>
-      `<tr><td>${fmtDateTime(p.createdAt)}</td><td>$${p.amount}</td><td>${p.method || 'Other'}</td><td>${escapeHtml(p.note) || '—'}</td></tr>`
+      `<tr><td>${fmtDateTime(p.createdAt)}</td><td>$${p.amount}</td><td>${escapeHtml(p.method || 'Other')}</td><td>${escapeHtml(p.note) || '—'}</td></tr>`
     ).join('') || `<tr><td colspan="4" class="empty">No payouts logged yet.</td></tr>`;
   } catch (e) {
     console.log('payouts load failed', e.message);
@@ -725,8 +734,8 @@ async function loadMerchantBranches() {
     el.innerHTML = accounts.map(a => `
       <div class="account-row">
         <span>
-          ${escapeHtml(a.username)}${a.location ? ' — ' + escapeHtml(a.location) : ''}<span class="account-role-badge ${a.role}">${a.role === 'manager' ? 'Manager' : 'Front desk'}</span>
-          <div class="note" style="margin-top:2px;">Password: <span class="voucher-code">${escapeHtml(a.plainPassword || '—')}</span></div>
+          ${escapeHtml(a.username)}${a.location ? ' — ' + escapeHtml(a.location) : ''}<span class="account-role-badge ${escapeHtml(a.role)}">${a.role === 'manager' ? 'Manager' : 'Front desk'}</span>
+          <div class="note" style="margin-top:2px;">Password: <span class="voucher-code">Set by admin</span></div>
         </span>
         <span>
           ${a.role === 'frontdesk' ? `
@@ -737,14 +746,19 @@ async function loadMerchantBranches() {
       </div>
     `).join('') || `<div class="empty">No branch accounts yet — ask Waffer to add one.</div>`;
   } catch (e) {
-    el.innerHTML = `<div class="empty">${e.message}</div>`;
+    el.innerHTML = `<div class="empty">${escapeHtml(e.message)}</div>`;
   }
 }
 
 async function regenerateMyBranchPassword(accountId) {
   try {
-    await api(`/api/merchant/accounts/${accountId}`, { method: 'PATCH', body: { regenerate: true } });
+    const { account } = await api(`/api/merchant/accounts/${accountId}`, { method: 'PATCH', body: { regenerate: true } });
     loadMerchantBranches();
+    /* The password is shown once here and never stored in readable form, so it
+       has to be captured now — write it down before closing this. */
+    if (account && account.tempPassword) {
+      alert(`New password for ${account.username}:\n\n${account.tempPassword}\n\nCopy it now — it is not shown again.`);
+    }
     toast('New password generated.', 'success');
   } catch (e) {
     toast(e.message, 'error');
@@ -769,8 +783,8 @@ async function loadMerchantProfile() {
     document.getElementById('mpContact').value = merchant.contact || '';
     document.getElementById('mpEmail').value = merchant.email || '';
     document.getElementById('mpLogoPreview').innerHTML = merchant.logoUrl
-      ? `<img src="${merchant.logoUrl}" style="width:44px;height:44px;border-radius:8px;object-fit:contain;background:#fff;border:1px solid var(--border);" />`
-      : `<div class="mini-logo-placeholder" style="width:44px;height:44px;">${(merchant.name || '??').slice(0,2).toUpperCase()}</div>`;
+      ? `<img src="${escapeHtml(merchant.logoUrl)}" style="width:44px;height:44px;border-radius:8px;object-fit:contain;background:#fff;border:1px solid var(--border);" />`
+      : `<div class="mini-logo-placeholder" style="width:44px;height:44px;">${escapeHtml((merchant.name || '??').slice(0,2).toUpperCase())}</div>`;
   } catch (e) {
     console.log('profile load failed', e.message);
   }
@@ -825,7 +839,9 @@ async function doMerchantLogin() {
 async function doMerchantLogout() {
   await api('/api/merchant/logout', { method: 'POST' });
   currentMerchant = null;
+  currentUser = null;
   renderMerchantArea();
+  renderAuthArea();
   switchView('customer');
 }
 
@@ -907,12 +923,12 @@ async function askAI() {
   try {
     const { offerId, message } = await api('/api/ai/recommend', { method: 'POST', body: { query } });
     if (offerId) {
-      resultEl.innerHTML = `<div class="ai-result"><span>${message}</span><button class="btn btn-secondary" onclick="openOfferById(${offerId})">View this offer</button></div>`;
+      resultEl.innerHTML = `<div class="ai-result"><span>${escapeHtml(message)}</span><button class="btn btn-secondary" onclick="openOfferById(${offerId})">View this offer</button></div>`;
     } else {
-      resultEl.innerHTML = `<div class="ai-result">${message}</div>`;
+      resultEl.innerHTML = `<div class="ai-result">${escapeHtml(message)}</div>`;
     }
   } catch (e) {
-    resultEl.innerHTML = `<div class="ai-result ai-error">${e.message}</div>`;
+    resultEl.innerHTML = `<div class="ai-result ai-error">${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -933,19 +949,22 @@ async function loadCategories() {
 function renderChips() {
   const el = document.getElementById('categoryChips');
   const cats = ["All", ...allCategories];
-  el.innerHTML = cats.map(c => `<button class="chip ${c === activeCategory ? 'active' : ''}" onclick="setCategory('${c}')">${c}</button>`).join('');
+  el.innerHTML = cats.map(c => `<button class="chip ${c === activeCategory ? 'active' : ''}" onclick="setCategory('${esc(c)}')">${escapeHtml(c)}</button>`).join('');
 }
 
 function setCategory(c) { activeCategory = c; renderChips(); renderOffers(); }
 
 function thumbContent(o) {
   if (o.imageUrl) {
-    return `<img class="offer-photo" src="${o.imageUrl}" alt="${o.title}" />`;
+    /* An image that 404s used to render as a broken-image box with the alt text
+       showing. Fall back to the merchant badge the same way the logo branch
+       does, so a missing file degrades quietly instead of looking broken. */
+    return `<img class="offer-photo" src="${escapeHtml(o.imageUrl)}" alt="${escapeHtml(o.title)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" /><span class="thumb-badge" style="display:none;">${escapeHtml(o.merchantInitials || '??')}</span>`;
   }
   if (o.merchantLogoUrl) {
-    return `<img class="merchant-logo" src="${o.merchantLogoUrl}" alt="${o.merchantName} logo" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" /><span class="thumb-badge" style="display:none;">${o.merchantInitials || '??'}</span>`;
+    return `<img class="merchant-logo" src="${escapeHtml(o.merchantLogoUrl)}" alt="${escapeHtml(o.merchantName)} logo" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" /><span class="thumb-badge" style="display:none;">${escapeHtml(o.merchantInitials || '??')}</span>`;
   }
-  return `${catIcons[o.category] || defaultCatIcon}<span class="thumb-badge">${o.merchantInitials || '??'}</span>`;
+  return `${catIcons[o.category] || defaultCatIcon}<span class="thumb-badge">${escapeHtml(o.merchantInitials || '??')}</span>`;
 }
 
 function starString(rating) {
@@ -968,9 +987,9 @@ async function renderDealOfDay() {
     const pct = Math.round((1 - best.price / best.original) * 100);
     slot.innerHTML = `
       <div class="deal-of-day">
-        <div class="dod-eyebrow"><span>Deal of the day</span><span>${best.category}</span></div>
-        <div class="dod-title">${best.title}</div>
-        <div class="dod-merchant">${best.merchantName}</div>
+        <div class="dod-eyebrow"><span>Deal of the day</span><span>${escapeHtml(best.category)}</span></div>
+        <div class="dod-title">${escapeHtml(best.title)}</div>
+        <div class="dod-merchant">${escapeHtml(best.merchantName)}</div>
         <div class="dod-perf"></div>
         <div class="dod-bottom">
           <div><div class="dod-price">$${best.price}</div><div class="dod-was">$${best.original}</div></div>
@@ -1002,9 +1021,9 @@ async function renderOffers() {
       <div class="offer-thumb">${thumbContent(o)}</div>
       <div class="offer-perforation"></div>
       <div class="offer-body">
-        <div class="offer-cat">${o.category}</div>
-        <div class="offer-title">${o.title}</div>
-        <div class="offer-merchant">${o.merchantName}</div>
+        <div class="offer-cat">${escapeHtml(o.category)}</div>
+        <div class="offer-title">${escapeHtml(o.title)}</div>
+        <div class="offer-merchant">${escapeHtml(o.merchantName)}</div>
         ${ratingRow(o)}
         <div class="offer-price-row">
           <span class="price-now">$${o.price}</span>
@@ -1029,21 +1048,21 @@ function openOffer(id) {
   const pct = Math.round((1 - currentOffer.price / currentOffer.original) * 100);
   const saved = (currentOffer.original - currentOffer.price).toFixed(2).replace(/\.00$/, '');
   document.getElementById('offerModalBody').innerHTML = `
-    <div class="tk-crumb"><strong onclick="closeModal('offerModal')" style="cursor:pointer;">← ${currentOffer.category}</strong><span>/</span><span>${currentOffer.merchantName}</span></div>
+    <div class="tk-crumb"><strong onclick="closeModal('offerModal')" style="cursor:pointer;">← ${escapeHtml(currentOffer.category)}</strong><span>/</span><span>${escapeHtml(currentOffer.merchantName)}</span></div>
     <div class="tk-detail-body">
       <div>
-        <div class="tk-hero-img">${currentOffer.imageUrl ? `<img src="${currentOffer.imageUrl}" alt="${currentOffer.title}" />` : 'Offer photo'}</div>
-        <div class="tk-eyebrow">${currentOffer.category} · ${currentOffer.merchantName}</div>
-        <h2 class="tk-title">${currentOffer.title}</h2>
+        <div class="tk-hero-img">${currentOffer.imageUrl ? `<img src="${escapeHtml(currentOffer.imageUrl)}" alt="${escapeHtml(currentOffer.title)}" />` : 'Offer photo'}</div>
+        <div class="tk-eyebrow">${escapeHtml(currentOffer.category)} · ${escapeHtml(currentOffer.merchantName)}</div>
+        <h2 class="tk-title">${escapeHtml(currentOffer.title)}</h2>
         <div class="tk-merchant-row">
-          <span class="tk-avatar">${currentOffer.merchantInitials || '??'}</span>
-          ${currentOffer.merchantName}
+          <span class="tk-avatar">${escapeHtml(currentOffer.merchantInitials || '??')}</span>
+          ${escapeHtml(currentOffer.merchantName)}
           ${currentOffer.reviewCount ? `<span class="stars">${starString(currentOffer.avgRating)}</span><strong>${currentOffer.avgRating}</strong>(${currentOffer.reviewCount})` : '<span style="color:var(--ink-faint);">No reviews yet</span>'}
         </div>
         <div class="tk-perf-h">
           <div class="tk-eyebrow" style="margin-top:0;">The fine print</div>
           <div class="tk-terms-list">
-            ${termsToBullets(currentOffer.terms).map(t => `<div><span>·</span>${t}</div>`).join('')}
+            ${termsToBullets(currentOffer.terms).map(t => `<div><span>·</span>${escapeHtml(t)}</div>`).join('')}
           </div>
         </div>
         <div class="tk-perf-h">
@@ -1052,7 +1071,7 @@ function openOffer(id) {
         </div>
       </div>
       <div class="tk-panel tk-panel-sticky">
-        <div class="tk-panel-eyebrow"><span>Voucher</span><span>${currentOffer.merchantName}</span></div>
+        <div class="tk-panel-eyebrow"><span>Voucher</span><span>${escapeHtml(currentOffer.merchantName)}</span></div>
         <div class="tk-panel-price"><span class="now">$${currentOffer.price}</span><span class="was">$${currentOffer.original}</span></div>
         <div class="tk-save-chip">You save $${saved} · ${pct}% off</div>
         <div class="tk-panel-perf"></div>
@@ -1103,8 +1122,8 @@ function startPurchase() {
   const total = (currentOffer.price * purchaseQty).toFixed(2).replace(/\.00$/, '');
   document.getElementById('purchaseSummary').innerHTML = `
     <div class="tk-line-item">
-      <div class="tk-avatar">${currentOffer.merchantInitials || '??'}</div>
-      <div class="info"><div class="t">${currentOffer.title}</div><div class="m">${currentOffer.merchantName} · qty ${purchaseQty}</div></div>
+      <div class="tk-avatar">${escapeHtml(currentOffer.merchantInitials || '??')}</div>
+      <div class="info"><div class="t">${escapeHtml(currentOffer.title)}</div><div class="m">${escapeHtml(currentOffer.merchantName)} · qty ${purchaseQty}</div></div>
       <strong>$${total}</strong>
     </div>`;
   document.getElementById('purchaseTotalFig').textContent = '$' + total;
@@ -1148,8 +1167,8 @@ function startGift() {
   window.__giftIdempotencyKey = crypto.randomUUID ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(36).slice(2));
   document.getElementById('giftSummary').innerHTML = `
     <div class="tk-line-item">
-      <div class="tk-avatar">${currentOffer.merchantInitials || '??'}</div>
-      <div class="info"><div class="t">${currentOffer.title}</div><div class="m">${currentOffer.merchantName}</div></div>
+      <div class="tk-avatar">${escapeHtml(currentOffer.merchantInitials || '??')}</div>
+      <div class="info"><div class="t">${escapeHtml(currentOffer.title)}</div><div class="m">${escapeHtml(currentOffer.merchantName)}</div></div>
       <strong>$${currentOffer.price}</strong>
     </div>`;
   document.getElementById('giftTotalFig').textContent = '$' + currentOffer.price;
@@ -1181,7 +1200,7 @@ async function checkGiftRecipient() {
         note.innerHTML = `<span style="color:var(--danger);font-weight:700;">You can't gift a voucher to yourself.</span>`;
       } else if (exists) {
         input.classList.add('valid');
-        note.innerHTML = `<span style="color:var(--success);font-weight:700;">${name} has an account — good to go.</span>`;
+        note.innerHTML = `<span style="color:var(--success);font-weight:700;">${escapeHtml(name)} has an account — good to go.</span>`;
       } else {
         note.innerHTML = `<span style="color:var(--gold-ink);font-weight:700;">No account yet — we'll email them to sign up and claim it.</span>`;
       }
@@ -1201,7 +1220,7 @@ function updateGiftPreview() {
   panel.innerHTML = `
     <div class="label">${occasion ? occasion.emoji + ' ' + occasion.label : "They'll see"}</div>
     <div class="headline">${currentUser ? escapeHtml(currentUser.name.split(' ')[0]) : 'You'} sent them ${escapeHtml(currentOffer.title)}</div>
-    ${message ? `<div style="font-size:13px;color:rgba(255,255,255,0.85);margin-top:8px;font-style:italic;">"${message}"</div>` : ''}
+    ${message ? `<div style="font-size:13px;color:rgba(255,255,255,0.85);margin-top:8px;font-style:italic;">"${escapeHtml(message)}"</div>` : ''}
     <div class="rule"></div>
     <div class="note">If they don't have an account yet, it sits as <strong>Pending claim</strong> until they sign up — cancel any time before then.</div>
   `;
@@ -1217,7 +1236,7 @@ async function completePurchase() {
     renderOffers();
     document.getElementById('purchaseSuccessTitle').textContent = vouchers.length > 1 ? `${vouchers.length} tickets, in your wallet` : 'One ticket, in your wallet';
     document.getElementById('purchaseSuccessSummary').textContent = `Show either code at ${currentOffer.merchantName}. Each one works once.`;
-    document.getElementById('purchaseSuccessCodes').innerHTML = vouchers.map(v => `<div class="tk-code-chip">${v.code}</div>`).join('');
+    document.getElementById('purchaseSuccessCodes').innerHTML = vouchers.map(v => `<div class="tk-code-chip">${escapeHtml(v.code)}</div>`).join('');
     document.getElementById('purchaseReceiptLine').textContent = currentUser ? `Receipt sent to ${currentUser.email}` : '';
     openModal('purchaseSuccessModal');
   } catch (e) {
@@ -1257,8 +1276,9 @@ async function completeGift() {
 
 function daysUntil(dateStr) {
   if (!dateStr) return null;
-  const diff = new Date(dateStr) - new Date();
-  return Math.ceil(diff / (1000 * 60 * 60 * 24));
+  const diff = Date.parse(String(dateStr).slice(0, 10) + 'T00:00:00Z') - Date.parse(beirutTodayStr() + 'T00:00:00Z');
+  if (isNaN(diff)) return null;
+  return Math.round(diff / (1000 * 60 * 60 * 24));
 }
 
 function expiryBadge(v) {
@@ -1291,11 +1311,11 @@ async function renderWallet() {
   sentEl.innerHTML = sent.map(v => `
     <div class="tk-ticket-card">
       <div class="tk-ticket-top">
-        <div class="tk-avatar">${(v.merchantName || '??').slice(0, 2).toUpperCase()}</div>
-        <div class="info"><div class="t">${v.offerTitle}</div><div class="m">To ${escapeHtml(v.giftedTo || v.recipientEmail || v.recipientPhone || 'pending')} · $${v.price}</div></div>
-        <span class="tk-state-badge ${v.status === 'pending-claim' ? 'tk-state-expiring' : 'tk-state-ready'}">${v.status === 'pending-claim' ? 'awaiting sign-up' : v.status}</span>
+        <div class="tk-avatar">${escapeHtml((v.merchantName || '??').slice(0, 2).toUpperCase())}</div>
+        <div class="info"><div class="t">${escapeHtml(v.offerTitle)}</div><div class="m">To ${escapeHtml(v.giftedTo || v.recipientEmail || v.recipientPhone || 'pending')} · $${v.price}</div></div>
+        <span class="tk-state-badge ${v.status === 'pending-claim' ? 'tk-state-expiring' : 'tk-state-ready'}">${v.status === 'pending-claim' ? 'awaiting sign-up' : escapeHtml(v.status)}</span>
       </div>
-      <div class="tk-ticket-bottom"><span class="code">${v.code}</span></div>
+      <div class="tk-ticket-bottom"><span class="code" style="letter-spacing:normal;font-size:12px;opacity:.65;">Code sent to the recipient</span></div>
     </div>
   `).join('');
 }
@@ -1347,8 +1367,8 @@ function renderWalletList() {
     if (v.status === 'redeemed') {
       return `
         <div class="tk-used-card">
-          <div class="tile">${(v.merchantName || '??').slice(0, 2).toUpperCase()}</div>
-          <div class="info"><div class="t" style="font-family:var(--font-display);font-size:16px;font-weight:700;color:var(--ink);">${v.offerTitle}</div><div class="m" style="font-size:11.5px;color:var(--ink-faint);">Redeemed ${fmtDate(v.redeemedAt)}</div></div>
+          <div class="tile">${escapeHtml((v.merchantName || '??').slice(0, 2).toUpperCase())}</div>
+          <div class="info"><div class="t" style="font-family:var(--font-display);font-size:16px;font-weight:700;color:var(--ink);">${escapeHtml(v.offerTitle)}</div><div class="m" style="font-size:11.5px;color:var(--ink-faint);">Redeemed ${fmtDate(v.redeemedAt)}</div></div>
           <span class="tk-state-badge tk-state-used">Used</span>
           ${!v.hasReviewed ? `<button class="tk-cancel-link" onclick="openWalletReview(${v.offerId})">Rate it</button>` : ''}
         </div>`;
@@ -1357,13 +1377,13 @@ function renderWalletList() {
     return `
       <div class="tk-ticket-card">
         <div class="tk-ticket-top">
-          <div class="tk-avatar">${(v.merchantName || '??').slice(0, 2).toUpperCase()}</div>
-          <div class="info"><div class="t">${v.offerTitle}${v.giftedTo ? ' <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(gift)</span>' : ''}</div><div class="m">${v.merchantName}${v.expiryDate ? ' · until ' + v.expiryDate : ''}</div></div>
+          <div class="tk-avatar">${escapeHtml((v.merchantName || '??').slice(0, 2).toUpperCase())}</div>
+          <div class="info"><div class="t">${escapeHtml(v.offerTitle)}${v.giftedTo ? ' <span style="font-weight:400;color:var(--ink-faint);font-size:11px;">(gift)</span>' : ''}</div><div class="m">${escapeHtml(v.merchantName)}${v.expiryDate ? ' · until ' + escapeHtml(v.expiryDate) : ''}</div></div>
           ${badge ? `<span class="tk-state-badge tk-state-expiring">${badge}</span>` : `<span class="tk-state-badge tk-state-ready">Ready</span>`}
         </div>
         <div class="tk-ticket-bottom">
-          <span class="code">${v.code}</span>
-          <button class="tk-show-btn" onclick="showQR('${v.code}')">Show ticket</button>
+          <span class="code">${escapeHtml(v.code)}</span>
+          <button class="tk-show-btn" onclick="showQR('${esc(v.code)}')">Show ticket</button>
         </div>
       </div>`;
   }).join('');
@@ -1411,9 +1431,9 @@ async function renderCategoryManageList() {
   const { categories } = await api('/api/admin/categories');
   window.__categoriesCache = categories;
   document.getElementById('categoryManageList').innerHTML = categories.map(c =>
-    `<div class="category-row"><span>${c.name}</span><button class="row-btn danger" onclick="deleteCategory(${c.id}, '${c.name.replace(/'/g, "\\'")}')">Delete</button></div>`
+    `<div class="category-row"><span>${escapeHtml(c.name)}</span><button class="row-btn danger" onclick="deleteCategory(${c.id}, '${esc(c.name)}')">Delete</button></div>`
   ).join('') || `<div class="empty">No categories yet.</div>`;
-  const options = categories.map(c => `<option>${c.name}</option>`).join('');
+  const options = categories.map(c => `<option>${escapeHtml(c.name)}</option>`).join('');
   document.getElementById('nmCategory').innerHTML = options;
   document.getElementById('eoCategory').innerHTML = options;
 }
@@ -1464,16 +1484,16 @@ async function renderAdmin() {
   const { merchants } = await api('/api/admin/merchants');
   document.getElementById('adminMerchantTable').innerHTML = merchants.map(m => `
     <tr>
-      <td>${m.logoUrl ? `<img class="mini-logo" src="${m.logoUrl}" alt="" />` : `<div class="mini-logo-placeholder">${m.initials || '??'}</div>`}</td>
-      <td>${m.name}</td>
-      <td>${m.category}</td>
+      <td>${m.logoUrl ? `<img class="mini-logo" src="${escapeHtml(m.logoUrl)}" alt="" />` : `<div class="mini-logo-placeholder">${escapeHtml(m.initials || '??')}</div>`}</td>
+      <td>${escapeHtml(m.name)}</td>
+      <td>${escapeHtml(m.category)}</td>
       <td><span class="commission-tag" onclick="editCommission(${m.id}, ${m.commissionRate == null ? 'null' : m.commissionRate})">${m.commissionRate != null ? Math.round(m.commissionRate * 100) + '%' : 'Default (8%)'}</span></td>
       <td>
         <input type="file" accept="image/*" style="display:none" id="logoFile-${m.id}" onchange="uploadLogo(${m.id}, this)" />
         <button class="row-btn" onclick="document.getElementById('logoFile-${m.id}').click()">Upload logo</button>
       </td>
-      <td><button class="row-btn" onclick="openAccountsModal(${m.id}, '${m.name.replace(/'/g, "\\'")}')">Manage accounts</button></td>
-      <td><button class="row-btn" onclick='openEditMerchant(${m.id}, ${JSON.stringify(m.name)}, ${JSON.stringify(m.category)}, ${JSON.stringify(m.contact || "")}, ${JSON.stringify(m.email || "")})'>Edit</button></td>
+      <td><button class="row-btn" onclick="openAccountsModal(${m.id}, '${esc(m.name)}')">Manage accounts</button></td>
+      <td><button class="row-btn" onclick='openEditMerchant(${m.id}, ${escapeHtml(JSON.stringify(m.name))}, ${escapeHtml(JSON.stringify(m.category))}, ${escapeHtml(JSON.stringify(m.contact || ""))}, ${escapeHtml(JSON.stringify(m.email || ""))})'>Edit</button></td>
     </tr>
   `).join('') || `<tr><td colspan="7" class="empty">No merchants yet.</td></tr>`;
 
@@ -1481,14 +1501,14 @@ async function renderAdmin() {
   document.getElementById('adminOfferTable').innerHTML = window.__adminOffersCache.map(o => `
     <tr>
       <td>
-        ${o.imageUrl ? `<img class="mini-photo" src="${o.imageUrl}" alt="" />` : `<div class="mini-photo-placeholder"></div>`}
+        ${o.imageUrl ? `<img class="mini-photo" src="${escapeHtml(o.imageUrl)}" alt="" />` : `<div class="mini-photo-placeholder"></div>`}
         <input type="file" accept="image/*" style="display:none" id="offerImg-${o.id}" onchange="uploadOfferImage(${o.id}, this)" />
         <button class="row-btn" style="margin-top:4px;" onclick="document.getElementById('offerImg-${o.id}').click()">Upload</button>
       </td>
-      <td><a href="#" class="offer-link" onclick="openOfferDetail(${o.id});return false;">${o.title}</a></td>
-      <td>${o.merchantName}</td><td>$${o.price}</td>
+      <td><a href="#" class="offer-link" onclick="openOfferDetail(${o.id});return false;">${escapeHtml(o.title)}</a></td>
+      <td>${escapeHtml(o.merchantName)}</td><td>$${o.price}</td>
       <td>${o.reviewCount ? starString(o.avgRating) + ' (' + o.reviewCount + ')' : '—'}</td>
-      <td>${o.sold}</td><td>${o.status}${o.featured ? ' <span title="Deal of the day" style="color:var(--accent);">★</span>' : ''}</td>
+      <td>${o.sold}</td><td>${escapeHtml(o.status)}${o.featured ? ' <span title="Deal of the day" style="color:var(--accent);">★</span>' : ''}</td>
       <td>
         <button class="row-btn" onclick="openEditOffer(${o.id})">Edit</button>
         <button class="row-btn" onclick="toggleOfferStatus(${o.id})">${o.status === 'Live' ? 'Pause' : 'Resume'}</button>
@@ -1587,8 +1607,8 @@ async function openOfferDetail(id) {
     const d = await api(`/api/admin/offers/${id}/detail`);
     const pct = Math.round((1 - d.offer.price / d.offer.original) * 100);
     document.getElementById('offerDetailBody').innerHTML = `
-      <h3>${d.offer.title}</h3>
-      <div class="offer-merchant" style="margin-bottom:16px;">${d.merchantName} &middot; ${d.offer.category} &middot; ${pct}% off ($${d.offer.price} of $${d.offer.original})</div>
+      <h3>${escapeHtml(d.offer.title)}</h3>
+      <div class="offer-merchant" style="margin-bottom:16px;">${escapeHtml(d.merchantName)} &middot; ${escapeHtml(d.offer.category)} &middot; ${pct}% off ($${d.offer.price} of $${d.offer.original})</div>
       <div class="stat-grid" style="margin-bottom:20px;">
         <div class="stat-card"><div class="stat-label">Sold</div><div class="stat-value">${d.sold}</div></div>
         <div class="stat-card"><div class="stat-label">Redeemed</div><div class="stat-value">${d.redeemed}</div></div>
@@ -1597,7 +1617,7 @@ async function openOfferDetail(id) {
       </div>
       <p class="note" style="margin-bottom:14px;">Merchant payout: <strong>$${d.payout}</strong></p>
       <table><thead><tr><th>Code</th><th>Buyer</th><th>Status</th><th>Purchased</th><th>Redeemed</th><th>Branch</th></tr></thead><tbody>
-        ${d.vouchers.map(v => `<tr><td class="voucher-code">${v.code}</td><td>${escapeHtml(v.buyerName)}${v.isGift ? ' (gift)' : ''}</td><td><span class="status-pill status-${v.status}">${v.status}</span></td><td>${fmtDateTime(v.createdAt)}</td><td>${fmtDateTime(v.redeemedAt)}</td><td>${v.redeemedByLocation || '—'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">No sales yet.</td></tr>'}
+        ${d.vouchers.map(v => `<tr><td class="voucher-code">${escapeHtml(v.code)}</td><td>${escapeHtml(v.buyerName)}${v.isGift ? ' (gift)' : ''}</td><td><span class="status-pill status-${escapeHtml(v.status)}">${escapeHtml(v.status)}</span></td><td>${fmtDateTime(v.createdAt)}</td><td>${fmtDateTime(v.redeemedAt)}</td><td>${escapeHtml(v.redeemedByLocation || '—')}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">No sales yet.</td></tr>'}
       </tbody></table>
     `;
     openModal('offerDetailModal');
@@ -1650,24 +1670,24 @@ async function loadFinance() {
   document.getElementById('finOutstanding').textContent = '$' + ov.totalOutstandingAllTime;
 
   document.getElementById('finTopMerchants').innerHTML = ov.topMerchants.map(m =>
-    `<tr><td>${m.name}</td><td>$${m.revenue}</td></tr>`
+    `<tr><td>${escapeHtml(m.name)}</td><td>$${m.revenue}</td></tr>`
   ).join('') || `<tr><td colspan="2" class="empty">No sales in this period.</td></tr>`;
 
   document.getElementById('finCategoryTable').innerHTML = ov.categoryBreakdown.map(c =>
-    `<tr><td>${c.category}</td><td>$${c.revenue}</td></tr>`
+    `<tr><td>${escapeHtml(c.category)}</td><td>$${c.revenue}</td></tr>`
   ).join('') || `<tr><td colspan="2" class="empty">No sales in this period.</td></tr>`;
 
   const mv = await api('/api/admin/finance/merchants?' + params.toString());
   document.getElementById('finMerchantTable').innerHTML = mv.merchants.map(m => `
     <tr>
-      <td>${m.name}</td>
+      <td>${escapeHtml(m.name)}</td>
       <td>${Math.round(m.commissionRate * 100)}%</td>
       <td>$${m.periodRevenue}</td>
       <td>$${m.periodCommission}</td>
       <td>$${m.periodPayout}</td>
       <td>$${m.lifetimeOutstanding}</td>
       <td>
-        <button class="row-btn" onclick="openLogPayout(${m.id}, '${m.name.replace(/'/g, "\\'")}', ${m.lifetimeOutstanding})">Log payout</button>
+        <button class="row-btn" onclick="openLogPayout(${m.id}, '${esc(m.name)}', ${m.lifetimeOutstanding})">Log payout</button>
         <a class="row-btn" style="text-decoration:none;display:inline-block;" href="/api/admin/merchants/${m.id}/invoice${from || to ? '?' + params.toString() : ''}" target="_blank">Invoice PDF</a>
       </td>
     </tr>
@@ -1681,6 +1701,7 @@ function openLogPayout(merchantId, merchantName, outstanding) {
   document.getElementById('lpAmount').value = '';
   document.getElementById('lpNote').value = '';
   clearNotice('lpNotice');
+  document.querySelector('#logPayoutModal .btn-primary').disabled = false;
   openModal('logPayoutModal');
 }
 
@@ -1690,6 +1711,9 @@ async function submitPayout() {
   const amount = document.getElementById('lpAmount').value;
   const payoutMethod = document.getElementById('lpMethod').value;
   const note = document.getElementById('lpNote').value.trim();
+  const payBtn = document.querySelector('#logPayoutModal .btn-primary');
+  if (payBtn.disabled) return;
+  payBtn.disabled = true;
   try {
     await api(`/api/admin/merchants/${merchantId}/payouts`, { method: 'POST', body: { amount, method: payoutMethod, note } });
     closeModal('logPayoutModal');
@@ -1697,6 +1721,7 @@ async function submitPayout() {
     toast('Payout logged.', 'success');
   } catch (e) {
     showNotice('lpNotice', e.message, 'error');
+    payBtn.disabled = false;
   }
 }
 
@@ -1735,7 +1760,7 @@ async function createMerchant() {
     document.getElementById('nmLogoUrl').value = '';
     closeModal('newMerchantModal');
     renderAdmin();
-    document.getElementById('credentialsBox').innerHTML = `Business: <strong>${merchant.name}</strong><br/>Role: <strong>Manager</strong><br/>Username: <strong>${managerUsername}</strong><br/>Password: <strong>${tempPassword}</strong>`;
+    document.getElementById('credentialsBox').innerHTML = `Business: <strong>${escapeHtml(merchant.name)}</strong><br/>Role: <strong>Manager</strong><br/>Username: <strong>${escapeHtml(managerUsername)}</strong><br/>Password: <strong>${escapeHtml(tempPassword)}</strong>`;
     openModal('credentialsModal');
   } catch (e) {
     showNotice('merchantNotice', e.message, 'error');
@@ -1745,7 +1770,7 @@ async function createMerchant() {
 function openEditMerchant(id, name, category, contact, email) {
   document.getElementById('emId').value = id;
   document.getElementById('emName').value = name;
-  document.getElementById('emCategory').innerHTML = (window.__categoriesCache || []).map(c => `<option ${c.name === category ? 'selected' : ''}>${c.name}</option>`).join('');
+  document.getElementById('emCategory').innerHTML = (window.__categoriesCache || []).map(c => `<option ${c.name === category ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
   document.getElementById('emContact').value = contact || '';
   document.getElementById('emEmail').value = email || '';
   clearNotice('editMerchantNotice');
@@ -1788,11 +1813,11 @@ async function renderAccountsList() {
   document.getElementById('accountsList').innerHTML = accounts.map(a => `
     <div class="account-row">
       <span>
-        ${a.username}${a.location ? ' — ' + a.location : ''}<span class="account-role-badge ${a.role}">${a.role === 'manager' ? 'Manager' : 'Front desk'}</span>
-        <div class="note" style="margin-top:2px;">Password: <span class="voucher-code">${a.plainPassword || '—'}</span></div>
+        ${escapeHtml(a.username)}${a.location ? ' — ' + escapeHtml(a.location) : ''}<span class="account-role-badge ${escapeHtml(a.role)}">${a.role === 'manager' ? 'Manager' : 'Front desk'}</span>
+        <div class="note" style="margin-top:2px;">Password: <span class="voucher-code">Set by admin</span></div>
       </span>
       <span>
-        <button class="row-btn" onclick="openEditAccount(${currentAccountsMerchantId}, ${a.id}, '${a.username}')">Edit</button>
+        <button class="row-btn" onclick="openEditAccount(${currentAccountsMerchantId}, ${a.id}, '${esc(a.username)}')">Edit</button>
         ${a.role === 'frontdesk' ? `<button class="row-btn danger" onclick="deleteFrontDeskAccount(${a.id})">Remove</button>` : ''}
       </span>
     </div>
@@ -1832,7 +1857,7 @@ async function regenerateAccountPassword() {
     const { account } = await api(`/api/admin/merchants/${merchantId}/accounts/${accountId}`, { method: 'PATCH', body: { regenerate: true } });
     closeModal('editAccountModal');
     renderAccountsList();
-    document.getElementById('credentialsBox').innerHTML = `Username: <strong>${account.username}</strong><br/>New password: <strong>${account.plainPassword}</strong>`;
+    document.getElementById('credentialsBox').innerHTML = `Username: <strong>${escapeHtml(account.username)}</strong><br/>New password: <strong>${escapeHtml(account.tempPassword)}</strong>`;
     openModal('credentialsModal');
   } catch (e) {
     showNotice('editAccountNotice', e.message, 'error');
@@ -1847,7 +1872,7 @@ async function addFrontDeskAccount() {
     const { account, tempPassword } = await api(`/api/admin/merchants/${currentAccountsMerchantId}/accounts`, { method: 'POST', body: { location } });
     document.getElementById('newLocationName').value = '';
     await renderAccountsList();
-    document.getElementById('credentialsBox').innerHTML = `Location: <strong>${account.location}</strong><br/>Role: <strong>Front desk</strong><br/>Username: <strong>${account.username}</strong><br/>Password: <strong>${tempPassword}</strong>`;
+    document.getElementById('credentialsBox').innerHTML = `Location: <strong>${escapeHtml(account.location)}</strong><br/>Role: <strong>Front desk</strong><br/>Username: <strong>${escapeHtml(account.username)}</strong><br/>Password: <strong>${escapeHtml(tempPassword)}</strong>`;
     closeModal('accountsModal');
     openModal('credentialsModal');
   } catch (e) {
@@ -1868,7 +1893,7 @@ async function deleteFrontDeskAccount(accountId) {
 
 async function openNewOfferModal() {
   const { merchants } = await api('/api/admin/merchants');
-  document.getElementById('noMerchant').innerHTML = merchants.map(m => `<option value="${m.id}">${m.name} (${m.category})</option>`).join('');
+  document.getElementById('noMerchant').innerHTML = merchants.map(m => `<option value="${m.id}">${escapeHtml(m.name)} (${escapeHtml(m.category)})</option>`).join('');
   openModal('newOfferModal');
 }
 
@@ -1921,9 +1946,13 @@ document.getElementById('aiQuery').addEventListener('keyup', (e) => { if (e.key 
     openModal('resetPasswordModal');
   } else if (verifyToken) {
     try {
-      const { user } = await api('/api/auth/verify-email', { method: 'POST', body: { token: verifyToken } });
+      const { user, claimedGifts } = await api('/api/auth/verify-email', { method: 'POST', body: { token: verifyToken } });
       if (currentUser && currentUser.id === user.id) { currentUser = user; renderAuthArea(); }
-      toast('Email verified. Thanks!', 'success');
+      if (claimedGifts > 0) {
+        toast(`Email verified — ${claimedGifts} gift voucher${claimedGifts > 1 ? 's are' : ' is'} now in "My vouchers".`, 'success');
+      } else {
+        toast('Email verified. Thanks!', 'success');
+      }
     } catch (e) {
       toast(e.message, 'error');
     }
@@ -1938,7 +1967,9 @@ document.getElementById('aiQuery').addEventListener('keyup', (e) => { if (e.key 
     const messages = {
       google: 'Google sign-in didn\'t go through. Please try again.',
       facebook: 'Facebook sign-in didn\'t go through. Please try again.',
-      facebook_no_email: 'Your Facebook account has no email on file, so we can\'t use it to sign in. Try Google or email instead.'
+      facebook_no_email: 'Your Facebook account has no email on file, so we can\'t use it to sign in. Try Google or email instead.',
+      google_unverified: 'That Google account\'s email address hasn\'t been verified with Google, so we can\'t use it to sign in.',
+      account_exists: 'You already have a Waffer account with this email address. Sign in with your password instead.'
     };
     toast(messages[authError] || 'Sign-in didn\'t go through. Please try again.', 'error');
     history.replaceState({}, '', location.pathname);
