@@ -20,13 +20,26 @@ function commissionRateFor(merchant) {
   return (merchant && typeof merchant.commissionRate === 'number') ? merchant.commissionRate : DEFAULT_COMMISSION_RATE;
 }
 
-const cloudinaryConfigured = !!(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
-if (cloudinaryConfigured) {
-  cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET
-  });
+/* Accept either the three separate variables or the single CLOUDINARY_URL that
+   Cloudinary's dashboard gives you (cloudinary://key:secret@cloud-name), and
+   trim the values so a trailing space pasted from the dashboard cannot silently
+   switch uploads off. Which form was found is logged at boot, so a misnamed
+   variable is visible in the logs instead of only as a 503 at upload time. */
+const envTrim = k => (process.env[k] || '').trim();
+const cldName = envTrim('CLOUDINARY_CLOUD_NAME');
+const cldKey = envTrim('CLOUDINARY_API_KEY');
+const cldSecret = envTrim('CLOUDINARY_API_SECRET');
+const cldUrl = envTrim('CLOUDINARY_URL');
+const cloudinaryConfigured = !!((cldName && cldKey && cldSecret) || cldUrl);
+if (cldName && cldKey && cldSecret) {
+  cloudinary.config({ cloud_name: cldName, api_key: cldKey, api_secret: cldSecret });
+  console.log('Cloudinary configured from CLOUDINARY_CLOUD_NAME / _API_KEY / _API_SECRET. Image uploads are enabled.');
+} else if (cldUrl) {
+  process.env.CLOUDINARY_URL = cldUrl;
+  cloudinary.config(); // the SDK reads CLOUDINARY_URL from the environment itself
+  console.log('Cloudinary configured from CLOUDINARY_URL. Image uploads are enabled.');
+} else {
+  console.warn('Cloudinary is NOT configured, so image uploads are disabled. Set CLOUDINARY_URL, or all three of CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET.');
 }
 
 /* Uploads an in-memory image buffer to Cloudinary, returning its permanent URL.
@@ -1816,6 +1829,84 @@ function merchantOutstanding(merchantId) {
   const totalPaid = money(data.payouts.filter(p => p.merchantId === merchantId).reduce((a, p) => a + p.amount, 0));
   return { lifetimeRevenue, lifetimeCommission, lifetimeNetOwed, totalPaid, outstanding: money(lifetimeNetOwed - totalPaid) };
 }
+
+/* Everything about one merchant on a single screen: their offers with real
+   sales figures, the money owed, voucher counts by status, staff accounts and
+   payout history. Each figure is derived from the voucher records rather than
+   from the offer's current price, so editing a price later cannot rewrite the
+   history shown here. */
+app.get('/api/admin/merchants/:id/detail', requireAdmin, (req, res) => {
+  const merchantId = Number(req.params.id);
+  const merchant = data.merchants.find(m => m.id === merchantId);
+  if (!merchant) return res.status(404).json({ error: 'Merchant not found.' });
+
+  const currentRate = commissionRateFor(merchant);
+  const myOffers = data.offers.filter(o => o.merchantId === merchantId);
+  const myOfferIds = myOffers.map(o => o.id);
+  const myVouchers = data.vouchers.filter(v => myOfferIds.includes(v.offerId));
+  const rateOf = v => (typeof v.commissionRate === 'number' ? v.commissionRate : currentRate);
+
+  const offers = myOffers.map(o => {
+    const ov = myVouchers.filter(v => v.offerId === o.id);
+    const revenue = money(ov.reduce((a, v) => a + v.price, 0));
+    const commission = money(ov.reduce((a, v) => a + v.price * rateOf(v), 0));
+    return {
+      id: o.id, title: o.title, category: o.category, status: o.status, featured: !!o.featured,
+      price: o.price, original: o.original,
+      startDate: o.startDate || null, expiryDate: o.expiryDate || null,
+      maxInventory: o.maxInventory == null ? null : o.maxInventory,
+      sold: ov.length,
+      redeemed: ov.filter(v => v.status === 'redeemed').length,
+      revenue, commission, payout: money(revenue - commission),
+      ...reviewStats(o.id)
+    };
+  }).sort((a, b) => b.revenue - a.revenue);
+
+  const counts = {
+    total: myVouchers.length,
+    active: myVouchers.filter(v => v.status === 'active').length,
+    redeemed: myVouchers.filter(v => v.status === 'redeemed').length,
+    pendingClaim: myVouchers.filter(v => v.status === 'pending-claim').length,
+    gifts: myVouchers.filter(v => v.buyerId && v.ownerId !== v.buyerId).length
+  };
+
+  const recent = myVouchers
+    .slice().sort((a, b) => b.createdAt - a.createdAt).slice(0, 50)
+    .map(v => {
+      const owner = data.users.find(u => u.id === v.ownerId);
+      const buyer = data.users.find(u => u.id === v.buyerId);
+      return {
+        code: v.code, offerTitle: v.offerTitle, price: v.price, status: v.status,
+        buyerName: buyer ? buyer.name : 'Unknown',
+        ownerName: owner ? owner.name : (v.recipientEmail || v.recipientPhone || null),
+        isGift: !!(v.buyerId && v.ownerId !== v.buyerId),
+        commissionRate: rateOf(v),
+        createdAt: v.createdAt, redeemedAt: v.redeemedAt || null,
+        redeemedByLocation: v.redeemedByLocation || null
+      };
+    });
+
+  const accounts = data.merchantAccounts.filter(a => a.merchantId === merchantId)
+    .map(a => ({ id: a.id, role: a.role, location: a.location || null, username: a.username }));
+
+  const payouts = data.payouts.filter(p => p.merchantId === merchantId)
+    .slice().sort((a, b) => b.createdAt - a.createdAt);
+
+  const ratesUsed = [...new Set(myVouchers.map(rateOf))];
+
+  res.json({
+    merchant: publicMerchant(merchant),
+    commissionRate: currentRate,
+    commissionIsDefault: !(typeof merchant.commissionRate === 'number'),
+    blendedRates: ratesUsed,
+    finance: merchantOutstanding(merchantId),
+    counts,
+    offers,
+    recent,
+    accounts,
+    payouts
+  });
+});
 
 app.get('/api/admin/finance/overview', requireAdmin, (req, res) => {
   const { from, to } = req.query;
