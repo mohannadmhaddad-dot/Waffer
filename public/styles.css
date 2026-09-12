@@ -111,9 +111,34 @@ main.customer-flow{background:var(--paper);}
 .field label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:5px;text-transform:uppercase;letter-spacing:0.4px;}
 .field input, .field textarea, .field select{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text);}
 .field textarea{resize:vertical;min-height:70px;}
-.phone-row{display:flex;gap:8px;}
-.phone-row select{flex:0 0 118px;}
-.phone-row input{flex:1;}
+.phone-row{display:flex;gap:8px;align-items:stretch;}
+/* A flex item's min-width defaults to its min-content size, and for a <select>
+   that is the widest option in the list — here a long country name. So the
+   118px basis below was silently ignored and the select ate the row, squeezing
+   the number field down to nothing. min-width:0 lets the basis win. */
+.phone-row select{flex:0 0 118px;min-width:0;}
+.phone-row input{flex:1 1 auto;min-width:0;}
+/* The gift modal has no .field wrapper, so this select was rendering with
+   default browser chrome beside a 2px rounded input — different height, border
+   and radius. Match .tk-recipient-input exactly so the row lines up. */
+#giftCountryCode{
+  flex:0 0 138px;
+  box-sizing:border-box;
+  background:#fff;
+  border:2px solid var(--rule);
+  border-radius:14px;
+  padding:13px 24px 13px 11px;
+  font-size:14px;
+  color:var(--ink);
+  -webkit-appearance:none;
+  -moz-appearance:none;
+  appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%236B5B44' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;
+  background-position:right 11px center;
+  cursor:pointer;
+}
+#giftCountryCode:focus{outline:none;border-color:var(--gold-dark);}
 .btn{padding:11px 18px;border-radius:8px;font-weight:700;font-size:14px;transition:background 0.12s, transform 0.08s;}
 .btn:active{transform:scale(0.98);}
 .btn-primary{background:var(--accent);color:#fff;}
@@ -142,6 +167,37 @@ main.customer-flow{background:var(--paper);}
 .status-active{background:var(--brand-light);color:var(--brand-dark);}
 .status-redeemed{background:var(--bg);color:var(--muted);border:1px solid var(--border);}
 .status-pending-claim{background:#FFF3E0;color:#B45309;}
+.status-live{background:var(--brand-light);color:var(--brand-dark);}
+.status-paused{background:var(--bg);color:var(--muted);border:1px solid var(--border);}
+
+/* ---- Merchant detail (admin drill-down) ---- */
+.link-name{color:var(--brand-dark);font-weight:600;cursor:pointer;border-bottom:1px solid transparent;}
+.link-name:hover{border-bottom-color:var(--brand-dark);}
+.md-back{display:inline-block;margin-bottom:14px;color:var(--muted);font-size:13px;font-weight:600;cursor:pointer;}
+.md-back:hover{color:var(--brand-dark);}
+.md-header{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;}
+.md-logo{width:60px;height:60px;border-radius:12px;object-fit:contain;background:#fff;border:1px solid var(--border);flex:0 0 60px;padding:6px;}
+.md-logo-empty{display:flex;align-items:center;justify-content:center;background:var(--brand-light);color:var(--brand-dark);font-weight:700;font-size:18px;padding:0;}
+.md-ident{flex:1 1 240px;min-width:0;}
+.md-ident h3{margin:0 0 5px;font-size:22px;}
+.md-meta{font-size:13px;color:var(--muted);}
+.md-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start;}
+.md-invoice{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-top:18px;padding-top:16px;border-top:1px solid var(--border);}
+.md-invoice .field{flex:0 1 170px;}
+.md-chip{display:inline-block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;padding:2px 7px;border-radius:5px;background:var(--brand-light);color:var(--brand-dark);vertical-align:middle;}
+.md-was{color:var(--muted);text-decoration:line-through;font-size:12px;}
+.md-chip-plain{text-transform:none;letter-spacing:0;font-weight:600;}
+/* Wide finance tables scroll inside their own panel rather than pushing the
+   whole page sideways on a phone. */
+.md-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+.md-scroll table{min-width:560px;}
+/* The one figure an admin is looking for: what we still owe. */
+.stat-card-due{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset;}
+.stat-card-due .stat-value{color:var(--accent-dark);}
+@media (max-width:620px){
+  .md-header{gap:12px;}
+  .md-actions{width:100%;}
+}
 .offer-link{color:var(--brand-dark);font-weight:600;text-decoration:none;}
 .offer-link:hover{text-decoration:underline;}
 .category-row{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border);font-size:14px;}

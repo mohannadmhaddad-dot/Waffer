@@ -1485,7 +1485,7 @@ async function renderAdmin() {
   document.getElementById('adminMerchantTable').innerHTML = merchants.map(m => `
     <tr>
       <td>${m.logoUrl ? `<img class="mini-logo" src="${escapeHtml(m.logoUrl)}" alt="" />` : `<div class="mini-logo-placeholder">${escapeHtml(m.initials || '??')}</div>`}</td>
-      <td>${escapeHtml(m.name)}</td>
+      <td><a class="link-name" onclick="openMerchantDetail(${m.id})">${escapeHtml(m.name)}</a></td>
       <td>${escapeHtml(m.category)}</td>
       <td><span class="commission-tag" onclick="editCommission(${m.id}, ${m.commissionRate == null ? 'null' : m.commissionRate})">${m.commissionRate != null ? Math.round(m.commissionRate * 100) + '%' : 'Default (8%)'}</span></td>
       <td>
@@ -1626,6 +1626,174 @@ async function openOfferDetail(id) {
   }
 }
 
+/* Clicking a merchant's name swaps the Merchants panel for this one. The tab
+   button stays highlighted, so it reads as a drill-down rather than a new tab. */
+let currentMerchantDetailId = null;
+
+function showMerchantDetailPanel() {
+  document.querySelectorAll('.admin-tab-panel').forEach(p => p.style.display = 'none');
+  document.getElementById('admin-tab-merchantdetail').style.display = 'block';
+  document.querySelectorAll('[data-admintab]').forEach(b => b.classList.remove('active'));
+  const btn = document.querySelector('[data-admintab="merchants"]');
+  if (btn) btn.classList.add('active');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+async function openMerchantDetail(id) {
+  currentMerchantDetailId = id;
+  showMerchantDetailPanel();
+  document.getElementById('merchantDetailBody').innerHTML = '<div class="panel"><div class="empty">Loading…</div></div>';
+  try {
+    const d = await api(`/api/admin/merchants/${id}/detail`);
+    renderMerchantDetail(d);
+  } catch (e) {
+    document.getElementById('merchantDetailBody').innerHTML =
+      `<div class="panel"><div class="empty">${escapeHtml(e.message)}</div></div>`;
+  }
+}
+
+function refreshMerchantDetail() {
+  const panel = document.getElementById('admin-tab-merchantdetail');
+  if (currentMerchantDetailId != null && panel && panel.style.display !== 'none') {
+    openMerchantDetail(currentMerchantDetailId);
+    return true;
+  }
+  return false;
+}
+
+function renderMerchantDetail(d) {
+  const m = d.merchant;
+  const f = d.finance;
+  const c = d.counts;
+  const pctLabel = `${(d.commissionRate * 100).toFixed(1).replace(/\.0$/, '')}%`;
+  /* Finance figures get two decimals — $12.8 in a commission column reads as
+     an error, not a number. */
+  const usd = v => '$' + Number(v || 0).toFixed(2);
+  const logo = m.logoUrl
+    ? `<img class="md-logo" src="${escapeHtml(m.logoUrl)}" alt="" />`
+    : `<div class="md-logo md-logo-empty">${escapeHtml((m.name || '??').slice(0, 2).toUpperCase())}</div>`;
+  const redeemRate = c.total ? Math.round(c.redeemed / c.total * 100) : 0;
+
+  document.getElementById('merchantDetailBody').innerHTML = `
+    <a class="md-back" onclick="setAdminTab('merchants')">← All merchants</a>
+
+    <div class="panel md-header">
+      ${logo}
+      <div class="md-ident">
+        <h3>${escapeHtml(m.name)}</h3>
+        <div class="md-meta">${escapeHtml(m.category)}${m.contact ? ' · ' + escapeHtml(m.contact) : ''}${m.email ? ' · ' + escapeHtml(m.email) : ''}</div>
+        <div class="md-meta">Commission ${pctLabel}${d.commissionIsDefault ? ' (platform default)' : ''} · ${d.accounts.length} staff account${d.accounts.length === 1 ? '' : 's'}</div>
+      </div>
+      <div class="md-actions">
+        <button class="row-btn" onclick="editCommission(${m.id}, ${d.commissionIsDefault ? 'null' : d.commissionRate})">Commission</button>
+        <button class="row-btn" onclick="openAccountsModal(${m.id}, ${JSON.stringify(m.name)})">Accounts</button>
+        <button class="row-btn" onclick='openEditMerchant(${m.id}, ${JSON.stringify(m.name)}, ${JSON.stringify(m.category)}, ${JSON.stringify(m.contact || "")}, ${JSON.stringify(m.email || "")})'>Edit</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h3 style="margin:0;">Money</h3>
+        <button class="btn btn-primary" onclick="openLogPayout(${m.id}, ${JSON.stringify(m.name)}, ${f.outstanding})">Log a payout</button>
+      </div>
+      <div class="stat-grid">
+        <div class="stat-card"><div class="stat-label">Lifetime sales</div><div class="stat-value">${usd(f.lifetimeRevenue)}</div></div>
+        <div class="stat-card"><div class="stat-label">Waffer commission</div><div class="stat-value">${usd(f.lifetimeCommission)}</div></div>
+        <div class="stat-card"><div class="stat-label">Earned by merchant</div><div class="stat-value">${usd(f.lifetimeNetOwed)}</div></div>
+        <div class="stat-card"><div class="stat-label">Already paid</div><div class="stat-value">${usd(f.totalPaid)}</div></div>
+        <div class="stat-card ${f.outstanding > 0 ? 'stat-card-due' : ''}"><div class="stat-label">Outstanding</div><div class="stat-value">${usd(f.outstanding)}</div></div>
+      </div>
+      ${d.blendedRates.length > 1 ? `<p class="note" style="margin-top:12px;">Sales here span ${d.blendedRates.length} different commission rates, each locked in at the time of sale. The commission figure is the sum of those, not today's rate applied retroactively.</p>` : ''}
+      <div class="md-invoice">
+        <div class="field" style="margin-bottom:0;"><label>Invoice from</label><input id="mdInvFrom" type="date" /></div>
+        <div class="field" style="margin-bottom:0;"><label>to</label><input id="mdInvTo" type="date" /></div>
+        <button class="row-btn" onclick="downloadMerchantInvoice(${m.id})">Download invoice PDF</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h3 style="margin:0;">Vouchers</h3></div>
+      <div class="stat-grid">
+        <div class="stat-card"><div class="stat-label">Sold all time</div><div class="stat-value">${c.total}</div></div>
+        <div class="stat-card"><div class="stat-label">Redeemed</div><div class="stat-value">${c.redeemed}</div></div>
+        <div class="stat-card"><div class="stat-label">Still unused</div><div class="stat-value">${c.active}</div></div>
+        <div class="stat-card"><div class="stat-label">Awaiting claim</div><div class="stat-value">${c.pendingClaim}</div></div>
+        <div class="stat-card"><div class="stat-label">Redemption rate</div><div class="stat-value">${redeemRate}%</div></div>
+      </div>
+      ${c.active > 0 ? `<p class="note" style="margin-top:12px;">${c.active} voucher${c.active === 1 ? '' : 's'} sold and not yet redeemed — a liability this merchant still has to honour.</p>` : ''}
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h3 style="margin:0;">Offers</h3>
+        <span class="note">${d.offers.length} total · click a title for per-voucher detail</span>
+      </div>
+      <div class="md-scroll"><table><thead><tr><th>Offer</th><th>Price</th><th>Status</th><th>Sold</th><th>Redeemed</th><th>Sales</th><th>Commission</th><th>Merchant earns</th><th>Rating</th></tr></thead><tbody>
+        ${d.offers.map(o => `<tr>
+          <td><a class="link-name" onclick="openOfferDetail(${o.id})">${escapeHtml(o.title)}</a>${o.featured ? ' <span class="md-chip">featured</span>' : ''}</td>
+          <td>$${o.price} <span class="md-was">$${o.original}</span></td>
+          <td><span class="status-pill status-${escapeHtml(String(o.status).toLowerCase())}">${escapeHtml(o.status)}</span></td>
+          <td>${o.sold}${o.maxInventory != null ? ` / ${o.maxInventory}` : ''}</td>
+          <td>${o.redeemed}</td>
+          <td>${usd(o.revenue)}</td>
+          <td>${usd(o.commission)}</td>
+          <td>${usd(o.payout)}</td>
+          <td>${o.avgRating != null ? escapeHtml(String(o.avgRating)) + ' (' + o.reviewCount + ')' : '—'}</td>
+        </tr>`).join('') || '<tr><td colspan="9" class="empty">No offers yet.</td></tr>'}
+      </tbody></table></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h3 style="margin:0;">Payout history</h3></div>
+      <div class="md-scroll"><table><thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Note</th></tr></thead><tbody>
+        ${d.payouts.map(p => `<tr>
+          <td>${fmtDateTime(p.createdAt)}</td><td>${usd(p.amount)}</td>
+          <td>${escapeHtml(p.method || '—')}</td><td>${escapeHtml(p.note || '—')}</td>
+        </tr>`).join('') || '<tr><td colspan="4" class="empty">Nothing paid out yet.</td></tr>'}
+      </tbody></table></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h3 style="margin:0;">Staff accounts</h3>
+        <button class="row-btn" onclick="openAccountsModal(${m.id}, ${JSON.stringify(m.name)})">Manage</button>
+      </div>
+      <div class="md-scroll"><table><thead><tr><th>Username</th><th>Role</th><th>Branch</th></tr></thead><tbody>
+        ${d.accounts.map(a => `<tr>
+          <td>${escapeHtml(a.username)}</td>
+          <td>${a.role === 'manager' ? 'Manager' : 'Front desk'}</td>
+          <td>${escapeHtml(a.location || '—')}</td>
+        </tr>`).join('') || '<tr><td colspan="3" class="empty">No accounts yet.</td></tr>'}
+      </tbody></table></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h3 style="margin:0;">Recent vouchers</h3>
+        <span class="note">latest ${d.recent.length} of ${c.total}</span>
+      </div>
+      <div class="md-scroll"><table><thead><tr><th>Code</th><th>Offer</th><th>Buyer</th><th>Price</th><th>Status</th><th>Bought</th><th>Redeemed</th><th>Branch</th></tr></thead><tbody>
+        ${d.recent.map(v => `<tr>
+          <td class="voucher-code">${escapeHtml(v.code)}</td>
+          <td>${escapeHtml(v.offerTitle)}</td>
+          <td>${escapeHtml(v.buyerName)}${v.isGift ? ` <span class="md-chip md-chip-plain">gift${v.ownerName ? ' → ' + escapeHtml(v.ownerName) : ''}</span>` : ''}</td>
+          <td>$${v.price}</td>
+          <td><span class="status-pill status-${escapeHtml(v.status)}">${escapeHtml(v.status)}</span></td>
+          <td>${fmtDateTime(v.createdAt)}</td>
+          <td>${fmtDateTime(v.redeemedAt)}</td>
+          <td>${escapeHtml(v.redeemedByLocation || '—')}</td>
+        </tr>`).join('') || '<tr><td colspan="8" class="empty">No sales yet.</td></tr>'}
+      </tbody></table></div>
+    </div>
+  `;
+}
+
+function downloadMerchantInvoice(merchantId) {
+  const from = document.getElementById('mdInvFrom').value;
+  const to = document.getElementById('mdInvTo').value;
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  const qs = params.toString();
+  window.open(`/api/admin/merchants/${merchantId}/invoice${qs ? '?' + qs : ''}`, '_blank');
+}
+
 async function editCommission(merchantId, currentRate) {
   const input = prompt('Commission rate as a percentage (e.g. 8 for 8%). Leave blank to use the default 8%.', currentRate != null ? Math.round(currentRate * 100) : '');
   if (input === null) return;
@@ -1633,7 +1801,7 @@ async function editCommission(merchantId, currentRate) {
   const rate = trimmed === '' ? null : Number(trimmed) / 100;
   try {
     await api(`/api/admin/merchants/${merchantId}/commission`, { method: 'PATCH', body: { rate } });
-    renderAdmin();
+    if (!refreshMerchantDetail()) renderAdmin();
     toast('Commission rate updated.', 'success');
   } catch (e) {
     toast(e.message, 'error');
@@ -1717,7 +1885,7 @@ async function submitPayout() {
   try {
     await api(`/api/admin/merchants/${merchantId}/payouts`, { method: 'POST', body: { amount, method: payoutMethod, note } });
     closeModal('logPayoutModal');
-    loadFinance();
+    if (!refreshMerchantDetail()) loadFinance();
     toast('Payout logged.', 'success');
   } catch (e) {
     showNotice('lpNotice', e.message, 'error');
@@ -1789,7 +1957,7 @@ async function saveMerchantEdit() {
   try {
     await api(`/api/admin/merchants/${id}`, { method: 'PATCH', body });
     closeModal('editMerchantModal');
-    renderAdmin();
+    if (!refreshMerchantDetail()) renderAdmin();
     toast('Merchant updated.', 'success');
   } catch (e) {
     showNotice('editMerchantNotice', e.message, 'error');
