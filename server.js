@@ -1,6 +1,7 @@
 const express = require('express');
 const session = require('express-session');
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
 const helmet = require('helmet');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
@@ -54,6 +55,11 @@ const facebookConfigured = !!(process.env.FACEBOOK_APP_ID && process.env.FACEBOO
 function findOrCreateSocialUser(email, name, provider, providerId) {
   let user = data.users.find(u => u.email.toLowerCase() === email.toLowerCase());
   if (user) {
+    /* An account that already has a password was created by someone who proved
+       control of this mailbox. A provider asserting the same address is not
+       proof of the same thing, so we refuse to hand over the account: the owner
+       must sign in with their password first. */
+    if (user.passwordHash) return null;
     if (provider === 'google' && !user.googleId) user.googleId = providerId;
     if (provider === 'facebook' && !user.facebookId) user.facebookId = providerId;
     db.save();
@@ -72,6 +78,100 @@ function findOrCreateSocialUser(email, name, provider, providerId) {
   return user;
 }
 
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 3 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) return cb(new Error('Only image files are allowed.'));
+    cb(null, true);
+  }
+});
+
+app.set('trust proxy', 1);
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      // 'unsafe-inline' is required here because the current frontend uses inline onclick=""
+      // handlers and inline style="" attributes throughout — rewriting every handler to
+      // addEventListener is a real, separate frontend refactor, not a quick header change.
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+      scriptSrcAttr: ["'unsafe-inline'"], // required: the app uses onclick="" attributes throughout
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      imgSrc: ["'self'", "data:", "https:"], // merchants can paste an external logo URL
+      connectSrc: ["'self'"]
+    }
+  },
+  crossOriginEmbedderPolicy: false
+}));
+app.use(express.json());
+/* F-20: with no store configured, express-session falls back to MemoryStore —
+   every deploy signed out every customer, merchant and admin, and expired
+   sessions were never reaped. Postgres is already provisioned, so sessions go
+   there. If the table or the module is missing we fall back rather than refuse
+   to boot, and say so in the logs. */
+let sessionStore;
+if (process.env.DATABASE_URL) {
+  try {
+    const PgSession = require('connect-pg-simple')(session);
+    sessionStore = new PgSession({
+      conString: process.env.DATABASE_URL,
+      tableName: 'user_sessions',
+      createTableIfMissing: true,
+      ssl: { rejectUnauthorized: false }
+    });
+    sessionStore.on('error', e => console.error('Session store error:', e.message));
+  } catch (e) {
+    console.warn('connect-pg-simple unavailable, falling back to in-memory sessions:', e.message);
+    sessionStore = undefined;
+  }
+}
+
+/* F-07: the fallback secret is committed to the repository, so anyone could
+   forge a signed cookie. Rather than refuse to boot — which would take the site
+   down on a deploy — an unset secret in production becomes a random one: safe,
+   and visibly noisy in the logs until it is set properly. */
+let sessionSecret = process.env.SESSION_SECRET;
+const isProd = process.env.NODE_ENV === 'production' || !!process.env.RENDER;
+if (!sessionSecret) {
+  if (isProd) {
+    sessionSecret = crypto.randomBytes(32).toString('hex');
+    console.warn('SESSION_SECRET is not set. Using a random secret for this boot — every deploy will sign everyone out until you set it.');
+  } else {
+    sessionSecret = 'waffer-dev-secret-change-in-production';
+  }
+}
+app.use(session({
+  store: sessionStore,
+  secret: sessionSecret,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    maxAge: 1000 * 60 * 60 * 24 * 7,
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: isProd
+  }
+}));
+app.use(express.static(path.join(__dirname, 'public')));
+
+function csrfProtection(req, res, next) {
+  if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) {
+    const contentType = req.get('Content-Type') || '';
+    const isJson = contentType.includes('application/json');
+    const isMultipart = contentType.includes('multipart/form-data');
+    if (!isJson && !isMultipart) {
+      return res.status(403).json({ error: 'Request rejected: invalid content type.' });
+    }
+  }
+  next();
+}
+app.use(csrfProtection);
+
+/* OAuth routes are registered AFTER the session middleware above. Registered
+   before it, req.session is undefined inside these handlers and the state
+   check below silently cannot run. */
 app.get('/api/auth/google', (req, res) => {
   if (!googleConfigured) return res.status(503).send('Google sign-in is not configured yet.');
   const state = crypto.randomBytes(16).toString('hex');
@@ -105,9 +205,14 @@ app.get('/api/auth/google/callback', async (req, res) => {
     });
     const profile = await profileRes.json();
     if (!profile.email) return res.redirect('/?authError=google');
+    if (profile.email_verified !== true) return res.redirect('/?authError=google_unverified');
     const user = findOrCreateSocialUser(profile.email, profile.name, 'google', profile.sub);
-    req.session.userId = user.id;
-    res.redirect('/');
+    if (!user) return res.redirect('/?authError=account_exists');
+    req.session.regenerate(err => {
+      if (err) return res.redirect('/?authError=google');
+      req.session.userId = user.id;
+      res.redirect('/');
+    });
   } catch (e) {
     res.redirect('/?authError=google');
   }
@@ -142,66 +247,16 @@ app.get('/api/auth/facebook/callback', async (req, res) => {
     const profile = await profileRes.json();
     if (!profile.email) return res.redirect('/?authError=facebook_no_email');
     const user = findOrCreateSocialUser(profile.email, profile.name, 'facebook', profile.id);
-    req.session.userId = user.id;
-    res.redirect('/');
+    if (!user) return res.redirect('/?authError=account_exists');
+    req.session.regenerate(err => {
+      if (err) return res.redirect('/?authError=facebook');
+      req.session.userId = user.id;
+      res.redirect('/');
+    });
   } catch (e) {
     res.redirect('/?authError=facebook');
   }
 });
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 3 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (!file.mimetype.startsWith('image/')) return cb(new Error('Only image files are allowed.'));
-    cb(null, true);
-  }
-});
-
-app.set('trust proxy', 1);
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      // 'unsafe-inline' is required here because the current frontend uses inline onclick=""
-      // handlers and inline style="" attributes throughout — rewriting every handler to
-      // addEventListener is a real, separate frontend refactor, not a quick header change.
-      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
-      scriptSrcAttr: ["'unsafe-inline'"], // required: the app uses onclick="" attributes throughout
-      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-      fontSrc: ["'self'", "https://fonts.gstatic.com"],
-      imgSrc: ["'self'", "data:", "https:"], // merchants can paste an external logo URL
-      connectSrc: ["'self'"]
-    }
-  },
-  crossOriginEmbedderPolicy: false
-}));
-app.use(express.json());
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'waffer-dev-secret-change-in-production',
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    maxAge: 1000 * 60 * 60 * 24 * 7,
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: !!process.env.RENDER
-  }
-}));
-app.use(express.static(path.join(__dirname, 'public')));
-
-function csrfProtection(req, res, next) {
-  if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) {
-    const contentType = req.get('Content-Type') || '';
-    const isJson = contentType.includes('application/json');
-    const isMultipart = contentType.includes('multipart/form-data');
-    if (!isJson && !isMultipart) {
-      return res.status(403).json({ error: 'Request rejected: invalid content type.' });
-    }
-  }
-  next();
-}
-app.use(csrfProtection);
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, max: 8, standardHeaders: true, legacyHeaders: false,
@@ -216,13 +271,40 @@ const forgotPasswordLimiter = rateLimit({
   message: { error: 'Too many reset requests. Please try again later.' }
 });
 
+const purchaseLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, max: 40, standardHeaders: true, legacyHeaders: false,
+  keyGenerator: req => (req.session && req.session.userId) ? 'u' + req.session.userId : ipKeyGenerator(req.ip),
+  message: { error: 'Too many purchases in a short time. Please try again shortly.' }
+});
+const redeemLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 400, standardHeaders: true, legacyHeaders: false,
+  keyGenerator: req => (req.session && req.session.merchantAccountId) ? 'm' + req.session.merchantAccountId : ipKeyGenerator(req.ip),
+  message: { error: 'Too many redemption attempts. Please wait a moment.' }
+});
+
+const lookupCodeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 400, standardHeaders: true, legacyHeaders: false,
+  keyGenerator: req => (req.session && req.session.merchantAccountId) ? 'l' + req.session.merchantAccountId : ipKeyGenerator(req.ip),
+  message: { error: 'Too many code lookups. Please wait a moment.' }
+});
+
 let data;
 
 /* ---------- Helpers ---------- */
+/* F-12: the old code was a sequential id plus four Math.random() characters,
+   so holding one voucher told you the ids either side of it and left only a
+   non-cryptographic tail to guess. Codes are now fully random, drawn from an
+   alphabet with no 0/O/1/I so they survive being read aloud at a counter. */
+const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function genVoucherCode() {
-  const id = db.nextId('voucher');
-  const rand = Math.random().toString(36).substr(2, 4).toUpperCase();
-  return 'WQ-' + id.toString(36).toUpperCase() + rand;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const bytes = crypto.randomBytes(10);
+    let out = '';
+    for (let i = 0; i < 10; i++) out += CODE_ALPHABET[bytes[i] % CODE_ALPHABET.length];
+    const code = 'WQ-' + out.slice(0, 5) + '-' + out.slice(5);
+    if (!data.vouchers.some(v => v.code === code)) return code;
+  }
+  throw new Error('Could not generate a unique voucher code.');
 }
 
 function slugify(name) {
@@ -231,8 +313,9 @@ function slugify(name) {
 
 function generatePassword() {
   const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.randomBytes(12);
   let out = '';
-  for (let i = 0; i < 10; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  for (let i = 0; i < 12; i++) out += chars[bytes[i] % chars.length];
   return out;
 }
 
@@ -313,6 +396,17 @@ function validateOfferPurchase(offer, buyerId, qty) {
   return null;
 }
 
+function validateVoucherExpiry(voucher) {
+  /* F-03: expiry used to be checked only in the browser, so anything that
+     skipped the UI — bulk redeem included — redeemed expired vouchers. The date
+     comes from the voucher's own snapshot, so editing the offer later cannot
+     retroactively invalidate a voucher someone has already paid for. */
+  if (voucher.expiryDate && nowInStoreTimezone().dateStr > voucher.expiryDate) {
+    return 'This voucher expired on ' + voucher.expiryDate + '.';
+  }
+  return null;
+}
+
 function validateRedemptionWindow(offer) {
   const now = nowInStoreTimezone();
   if (Array.isArray(offer.redemptionDays) && offer.redemptionDays.length) {
@@ -322,7 +416,12 @@ function validateRedemptionWindow(offer) {
     const [fh, fm] = offer.redemptionHours.from.split(':').map(Number);
     const [th, tm] = offer.redemptionHours.to.split(':').map(Number);
     const fromMinutes = fh * 60 + fm, toMinutes = th * 60 + tm;
-    if (now.minutesSinceMidnight < fromMinutes || now.minutesSinceMidnight > toMinutes) {
+    /* F-16: a window like 20:00-02:00 wraps past midnight. Comparing it as a
+       single ascending range rejected every minute of the day. */
+    const inWindow = toMinutes >= fromMinutes
+      ? (now.minutesSinceMidnight >= fromMinutes && now.minutesSinceMidnight < toMinutes)
+      : (now.minutesSinceMidnight >= fromMinutes || now.minutesSinceMidnight < toMinutes);
+    if (!inWindow) {
       return `This offer can only be redeemed between ${offer.redemptionHours.from} and ${offer.redemptionHours.to} (Beirut time).`;
     }
   }
@@ -367,10 +466,22 @@ const IDEMPOTENCY_TTL = 5 * 60 * 1000;
 
 function checkIdempotency(userId, key) {
   if (!key) return null;
-  const cached = idempotencyCache.get(`${userId}:${key}`);
-  if (cached && Date.now() - cached.timestamp < IDEMPOTENCY_TTL) return cached.result;
-  return null;
+  const id = `${userId}:${key}`;
+  const cached = idempotencyCache.get(id);
+  if (!cached) return null;
+  /* F-26: the TTL was only read, never enforced, so every key ever sent stayed
+     in memory for the life of the process along with its full response body. */
+  if (Date.now() - cached.timestamp >= IDEMPOTENCY_TTL) {
+    idempotencyCache.delete(id);
+    return null;
+  }
+  return cached.result;
 }
+
+setInterval(() => {
+  const cutoff = Date.now() - IDEMPOTENCY_TTL;
+  for (const [k, v] of idempotencyCache) if (v.timestamp < cutoff) idempotencyCache.delete(k);
+}, IDEMPOTENCY_TTL).unref();
 function saveIdempotency(userId, key, result) {
   if (!key) return;
   idempotencyCache.set(`${userId}:${key}`, { result, timestamp: Date.now() });
@@ -506,6 +617,15 @@ function currentMerchantAccount(req) {
   return data.merchantAccounts.find(a => a.id === req.session.merchantAccountId) || null;
 }
 
+/* F-23: emailVerified was written, returned and displayed, but never gated
+   anything — the only enforcement was a dismissible banner in the browser. */
+function requireVerifiedEmail(req, res, next) {
+  if (req.user.emailVerified === false) {
+    return res.status(403).json({ error: 'Please verify your email address first — check your inbox for the link.' });
+  }
+  next();
+}
+
 function requireAuth(req, res, next) {
   const user = currentUser(req);
   if (!user) return res.status(401).json({ error: 'Please log in first.' });
@@ -556,6 +676,32 @@ function originOf(req) {
 }
 
 /* ---------- Customer auth ---------- */
+/* F-02: this used to run at signup, before the verification email had even
+   been sent, so anyone who typed a stranger's address or phone number walked
+   off with their gift. Ownership now transfers only after the mailbox has been
+   proven, and phone numbers are unique per account so a number cannot be
+   squatted while it belongs to somebody else. */
+function pendingGiftsFor(user) {
+  const email = (user.email || '').toLowerCase();
+  const phone = (user.phone || '').toLowerCase();
+  return data.vouchers.filter(v => v.status === 'pending-claim' &&
+    ((v.recipientEmail && v.recipientEmail === email) ||
+     (v.recipientPhone && phone && v.recipientPhone === phone)));
+}
+
+function claimPendingGifts(user) {
+  if (user.emailVerified === false) return 0;
+  const pending = pendingGiftsFor(user);
+  pending.forEach(v => {
+    v.ownerId = user.id;
+    v.status = 'active';
+    v.giftedTo = user.name;
+    v.recipientEmail = null;
+    v.recipientPhone = null;
+  });
+  return pending.length;
+}
+
 app.post('/api/auth/register', registerLimiter, (req, res) => {
   const { name, email, phone, countryCode, password, gender, birthday } = req.body;
   const fullPhone = phone ? `${countryCode || ''}${phone}`.trim() : '';
@@ -568,8 +714,14 @@ app.post('/api/auth/register', registerLimiter, (req, res) => {
   if (data.users.some(u => u.email.toLowerCase() === email.toLowerCase())) {
     return res.status(400).json({ error: 'An account with that email already exists.' });
   }
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Choose a password of at least 8 characters.' });
+  }
+  if (fullPhone && data.users.some(u => (u.phone || '').toLowerCase() === fullPhone.toLowerCase())) {
+    return res.status(400).json({ error: 'An account with that phone number already exists.' });
+  }
   const id = db.nextId('user');
-  const passwordHash = bcrypt.hashSync(password, 8);
+  const passwordHash = bcrypt.hashSync(password, 10);
   const verifyToken = crypto.randomBytes(24).toString('hex');
   const user = {
     id, name, email, phone: fullPhone, passwordHash, isAdmin: false, createdAt: Date.now(),
@@ -577,30 +729,19 @@ app.post('/api/auth/register', registerLimiter, (req, res) => {
     emailVerified: false, verifyToken
   };
   data.users.push(user);
-
-  const claimEmail = email.toLowerCase();
-  const claimPhone = fullPhone.toLowerCase();
-  let claimedCount = 0;
-  data.vouchers.forEach(v => {
-    if (v.status === 'pending-claim' &&
-      ((v.recipientEmail && v.recipientEmail === claimEmail) ||
-       (v.recipientPhone && claimPhone && v.recipientPhone === claimPhone))) {
-      v.ownerId = id;
-      v.status = 'active';
-      v.giftedTo = name;
-      v.recipientEmail = null;
-      v.recipientPhone = null;
-      claimedCount++;
-    }
-  });
   db.save();
-  req.session.userId = id;
+
+  const pendingGifts = pendingGiftsFor(user).length;
 
   const verifyLink = `${originOf(req)}/?verifyToken=${verifyToken}`;
   sendEmail(email, 'Verify your Waffer email',
     emailTemplate('Welcome to Waffer!', `<p>Hi ${name},</p><p>Thanks for signing up. Please confirm your email address to get full access to your account.</p>${emailButton('Verify my email', verifyLink)}<p style="color:#64748B;font-size:12.5px;">If the button doesn't work, copy this link: ${verifyLink}</p>`, originOf(req)));
 
-  res.json({ user: publicUser(user), claimedGifts: claimedCount });
+  req.session.regenerate(err => {
+    if (err) return res.status(500).json({ error: 'Could not start your session. Please try again.' });
+    req.session.userId = id;
+    res.json({ user: publicUser(user), claimedGifts: 0, pendingGifts });
+  });
 });
 
 app.post('/api/auth/login', authLimiter, (req, res) => {
@@ -612,13 +753,20 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
     }
     return res.status(400).json({ error: 'Incorrect email or password.' });
   }
-  req.session.userId = user.id;
-  res.json({ user: publicUser(user) });
+  req.session.regenerate(err => {
+    if (err) return res.status(500).json({ error: 'Could not start your session. Please try again.' });
+    req.session.userId = user.id;
+    res.json({ user: publicUser(user) });
+  });
 });
 
+/* F-06: null-ing one field left the session record and its cookie alive, and
+   left the other role signed in on the same browser. Destroy both. */
 app.post('/api/auth/logout', (req, res) => {
-  req.session.userId = null;
-  res.json({ ok: true });
+  req.session.destroy(() => {
+    res.clearCookie('connect.sid');
+    res.json({ ok: true });
+  });
 });
 
 app.get('/api/auth/me', (req, res) => {
@@ -647,8 +795,8 @@ app.post('/api/auth/change-password', requireAuth, (req, res) => {
   const { currentPassword, newPassword } = req.body;
   if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Enter your current and new password.' });
   if (!bcrypt.compareSync(currentPassword, req.user.passwordHash)) return res.status(400).json({ error: 'Current password is incorrect.' });
-  if (newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters.' });
-  req.user.passwordHash = bcrypt.hashSync(newPassword, 8);
+  if (newPassword.length < 8) return res.status(400).json({ error: 'New password must be at least 6 characters.' });
+  req.user.passwordHash = bcrypt.hashSync(newPassword, 10);
   db.save();
   res.json({ ok: true });
 });
@@ -673,7 +821,8 @@ app.post('/api/auth/reset-password', (req, res) => {
   if (!token || !newPassword) return res.status(400).json({ error: 'Missing token or new password.' });
   const user = data.users.find(u => u.resetToken === token && u.resetTokenExpiry && u.resetTokenExpiry > Date.now());
   if (!user) return res.status(400).json({ error: 'This reset link is invalid or has expired.' });
-  user.passwordHash = bcrypt.hashSync(newPassword, 8);
+  if (!newPassword || newPassword.length < 8) return res.status(400).json({ error: 'Choose a password of at least 8 characters.' });
+  user.passwordHash = bcrypt.hashSync(newPassword, 10);
   user.resetToken = null;
   user.resetTokenExpiry = null;
   db.save();
@@ -687,8 +836,9 @@ app.post('/api/auth/verify-email', (req, res) => {
   if (!user) return res.status(400).json({ error: 'This verification link is invalid or has already been used.' });
   user.emailVerified = true;
   user.verifyToken = null;
+  const claimedGifts = claimPendingGifts(user);
   db.save();
-  res.json({ ok: true, user: publicUser(user) });
+  res.json({ ok: true, user: publicUser(user), claimedGifts });
 });
 
 app.post('/api/auth/resend-verification', requireAuth, async (req, res) => {
@@ -710,13 +860,18 @@ app.post('/api/merchant/login', authLimiter, (req, res) => {
     return res.status(400).json({ error: 'Incorrect username or password.' });
   }
   const business = data.merchants.find(m => m.id === account.merchantId);
-  req.session.merchantAccountId = account.id;
-  res.json({ merchant: publicMerchantAccount(account, business) });
+  req.session.regenerate(err => {
+    if (err) return res.status(500).json({ error: 'Could not start your session. Please try again.' });
+    req.session.merchantAccountId = account.id;
+    res.json({ merchant: publicMerchantAccount(account, business) });
+  });
 });
 
 app.post('/api/merchant/logout', (req, res) => {
-  req.session.merchantAccountId = null;
-  res.json({ ok: true });
+  req.session.destroy(() => {
+    res.clearCookie('connect.sid');
+    res.json({ ok: true });
+  });
 });
 
 app.get('/api/merchant/me', (req, res) => {
@@ -725,18 +880,19 @@ app.get('/api/merchant/me', (req, res) => {
   res.json({ merchant: account ? publicMerchantAccount(account, business) : null });
 });
 
-app.post('/api/merchant/change-password', requireMerchantManager, (req, res) => {
+/* F-24: this acts only on the caller's own account, so the manager check
+   protected nothing and left branch staff unable to rotate their password. */
+app.post('/api/merchant/change-password', requireMerchant, (req, res) => {
   const { currentPassword, newPassword } = req.body;
   if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Enter your current and new password.' });
   if (!bcrypt.compareSync(currentPassword, req.merchantAccount.passwordHash)) return res.status(400).json({ error: 'Current password is incorrect.' });
-  if (newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters.' });
-  req.merchantAccount.passwordHash = bcrypt.hashSync(newPassword, 8);
-  req.merchantAccount.plainPassword = newPassword;
+  if (newPassword.length < 8) return res.status(400).json({ error: 'New password must be at least 6 characters.' });
+  req.merchantAccount.passwordHash = bcrypt.hashSync(newPassword, 10);
   db.save();
   res.json({ ok: true });
 });
 
-app.get('/api/merchant/voucher-lookup', requireMerchant, (req, res) => {
+app.get('/api/merchant/voucher-lookup', requireMerchant, lookupCodeLimiter, (req, res) => {
   const code = (req.query.code || '').trim().toUpperCase();
   if (!code) return res.status(400).json({ error: 'Enter a voucher code.' });
   const voucher = data.vouchers.find(v => v.code === code);
@@ -752,7 +908,8 @@ app.get('/api/merchant/voucher-lookup', requireMerchant, (req, res) => {
       code: voucher.code, offerTitle: voucher.offerTitle, price: voucher.price,
       status: voucher.status, expiryDate: voucher.expiryDate, redeemedAt: voucher.redeemedAt,
       createdAt: voucher.createdAt, terms: offer.terms || null,
-      buyerName: (owner || buyer) ? (owner || buyer).name : 'Unknown'
+      buyerName: (owner || buyer) ? (owner || buyer).name : 'Unknown',
+      blockedReason: validateVoucherExpiry(voucher) || validateRedemptionWindow(offer)
     }
   });
 });
@@ -782,11 +939,15 @@ app.get('/api/merchant/dashboard', requireMerchantManager, (req, res) => {
   const payout = money(revenue - commission);
   const offerBreakdown = myOffers.map(o => {
     const ov = myVouchers.filter(v => v.offerId === o.id);
-    return { id: o.id, title: o.title, status: o.status, sold: ov.length, redeemed: ov.filter(v => v.status === 'redeemed').length, revenue: money(ov.length * o.price), ...reviewStats(o.id) };
+    return { id: o.id, title: o.title, status: o.status, sold: ov.length, redeemed: ov.filter(v => v.status === 'redeemed').length, revenue: money(ov.reduce((a, v) => a + v.price, 0)), ...reviewStats(o.id) };
   }).sort((a, b) => b.revenue - a.revenue);
+  /* F-13: full codes here let a merchant paste their own list into bulk redeem
+     and burn every outstanding voucher. Only the tail is shown now — enough to
+     match a customer's voucher on screen, not enough to redeem one. */
+  const maskCode = c => (c || '').length > 4 ? '••••' + c.slice(-4) : c;
   const recent = allMyVouchers.map(v => {
     const buyer = data.users.find(u => u.id === v.buyerId);
-    return { code: v.code, offerTitle: v.offerTitle, buyerName: buyer ? buyer.name : 'Unknown', price: v.price, status: v.status, createdAt: v.createdAt, redeemedAt: v.redeemedAt, redeemedByLocation: v.redeemedByLocation || null };
+    return { code: maskCode(v.code), offerTitle: v.offerTitle, buyerName: buyer ? buyer.name : 'Unknown', price: v.price, status: v.status, createdAt: v.createdAt, redeemedAt: v.redeemedAt, redeemedByLocation: v.redeemedByLocation || null };
   }).sort((a, b) => b.createdAt - a.createdAt).slice(0, 100);
   const dailyTrend = buildDailyTrend(myVouchers, from, to);
   res.json({ sold, redeemed, revenue, commission, payout, commissionRate: currentRate, offers: offerBreakdown, recent, dailyTrend });
@@ -803,7 +964,7 @@ app.get('/api/merchant/payouts', requireMerchantManager, (req, res) => {
    accounts or profile even by guessing IDs. Admin retains full access to all
    of this via the existing /api/admin/merchants/... routes, unchanged. */
 app.get('/api/merchant/accounts', requireMerchantManager, (req, res) => {
-  const accounts = data.merchantAccounts.filter(a => a.merchantId === req.merchant.id).map(a => ({ ...a, passwordHash: undefined }));
+  const accounts = data.merchantAccounts.filter(a => a.merchantId === req.merchant.id).map(a => ({ ...a, passwordHash: undefined, plainPassword: undefined }));
   res.json({ accounts });
 });
 
@@ -823,15 +984,15 @@ app.patch('/api/merchant/accounts/:accountId', requireMerchantManager, (req, res
   if (regenerate) {
     newPlainPassword = generatePassword();
   } else if (password && password.trim()) {
-    if (password.trim().length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+    if (password.trim().length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
     newPlainPassword = password.trim();
   }
   if (newPlainPassword) {
-    account.passwordHash = bcrypt.hashSync(newPlainPassword, 8);
-    account.plainPassword = newPlainPassword;
+    account.passwordHash = bcrypt.hashSync(newPlainPassword, 10);
   }
   db.save();
-  res.json({ account: { ...account, passwordHash: undefined } });
+  /* Shown once, in this response only — never stored. */
+  res.json({ account: { ...account, passwordHash: undefined, tempPassword: newPlainPassword || undefined } });
 });
 
 app.delete('/api/merchant/accounts/:accountId', requireMerchantManager, (req, res) => {
@@ -849,12 +1010,15 @@ app.get('/api/merchant/profile', requireMerchantManager, (req, res) => {
 
 app.patch('/api/merchant/profile', requireMerchantManager, (req, res) => {
   const { name, contact, email } = req.body;
-  if (email !== undefined && email.trim() && !isValidEmail(email)) {
+  /* F-22: `email.trim()` on a null threw an unhandled TypeError, which returned
+     a stack trace to any merchant-authenticated caller. */
+  const emailStr = typeof email === 'string' ? email.trim() : '';
+  if (email !== undefined && emailStr && !isValidEmail(emailStr)) {
     return res.status(400).json({ error: 'Enter a valid email address (e.g. name@example.com).' });
   }
-  if (name && name.trim()) req.merchant.name = name.trim();
-  if (contact !== undefined) req.merchant.contact = contact;
-  if (email !== undefined) req.merchant.email = email.trim() || null;
+  if (typeof name === 'string' && name.trim()) req.merchant.name = name.trim().slice(0, 120);
+  if (contact !== undefined) req.merchant.contact = typeof contact === 'string' ? contact.slice(0, 120) : null;
+  if (email !== undefined) req.merchant.email = emailStr || null;
   db.save();
   res.json({ merchant: publicMerchant(req.merchant) });
 });
@@ -942,7 +1106,13 @@ app.post('/api/offers/:id/reviews', requireAuth, (req, res) => {
 });
 
 /* ---------- AI offer finder ---------- */
-app.post('/api/ai/recommend', async (req, res) => {
+const aiLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Too many searches. Please try again shortly.' }
+});
+/* F-27: unauthenticated and unmetered, every call billed the platform's own
+   API key. */
+app.post('/api/ai/recommend', aiLimiter, async (req, res) => {
   const { query } = req.body;
   if (!query || !query.trim()) return res.status(400).json({ error: "Tell us what you're looking for." });
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -968,7 +1138,7 @@ app.post('/api/ai/recommend', async (req, res) => {
       })
     });
     const json = await resp.json();
-    if (json.error) return res.status(502).json({ error: 'AI search failed: ' + json.error.message });
+    if (json.error) return res.status(502).json({ error: 'AI search failed. Try again in a moment.' });
     let text = (json.content && json.content[0] && json.content[0].text) || '{}';
     text = text.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```$/, '').trim();
     let parsed;
@@ -981,12 +1151,14 @@ app.post('/api/ai/recommend', async (req, res) => {
 });
 
 /* ---------- Vouchers ---------- */
-app.post('/api/vouchers/purchase', requireAuth, async (req, res) => {
+app.post('/api/vouchers/purchase', requireAuth, purchaseLimiter, async (req, res) => {
   const { offerId, quantity, idempotencyKey } = req.body;
   const cached = checkIdempotency(req.user.id, idempotencyKey);
   if (cached) return res.json(cached);
 
-  const qty = Math.max(1, Math.min(20, Number(quantity) || 1));
+  /* F-01: without the floor, quantity 1.000001 charged for one voucher and
+     issued two, because the loop below runs Math.ceil(qty) times. */
+  const qty = Math.max(1, Math.min(20, Math.floor(Number(quantity)) || 1));
   const offer = data.offers.find(o => o.id === Number(offerId));
   const validationError = validateOfferPurchase(offer, req.user.id, qty);
   if (validationError) return res.status(400).json({ error: validationError });
@@ -994,16 +1166,28 @@ app.post('/api/vouchers/purchase', requireAuth, async (req, res) => {
   const lockedCommissionRate = commissionRateFor(merchant);
   const totalAmount = money(offer.price * qty);
 
-  const paymentResult = await paymentProvider.createPayment({
-    amount: totalAmount, currency: 'USD', customerId: req.user.id,
-    metadata: { offerId: offer.id, quantity: qty }
-  });
+  /* F-11: validation happened before the payment await and the counter moved
+     only after it, so concurrent buyers all passed the same stale check. The
+     stock is taken first now and handed back if the payment fails. */
+  offer.sold += qty;
+  let paymentResult;
+  try {
+    paymentResult = await paymentProvider.createPayment({
+      amount: totalAmount, currency: 'USD', customerId: req.user.id,
+      metadata: { offerId: offer.id, quantity: qty }
+    });
+  } catch (e) {
+    offer.sold -= qty;
+    return res.status(502).json({ error: 'Payment could not be completed. Please try again.' });
+  }
   if (!paymentResult.success) {
+    offer.sold -= qty;
     return res.status(402).json({ error: 'Payment failed. Please try again.' });
   }
 
   const discountPct = Math.round((1 - offer.price / offer.original) * 100);
   const vouchers = [];
+  try {
   for (let i = 0; i < qty; i++) {
     const code = genVoucherCode();
     const voucher = {
@@ -1016,7 +1200,12 @@ app.post('/api/vouchers/purchase', requireAuth, async (req, res) => {
     data.vouchers.push(voucher);
     vouchers.push(voucher);
   }
-  offer.sold += qty;
+  } catch (e) {
+    offer.sold -= qty;
+    vouchers.forEach(v => { data.vouchers = data.vouchers.filter(x => x !== v); });
+    console.error('Voucher creation failed after payment', paymentResult.transactionId, e);
+    return res.status(500).json({ error: 'Your payment went through but we could not issue the voucher. Our team has been alerted — please contact support with this reference: ' + paymentResult.transactionId });
+  }
   db.save();
 
   const codeList = vouchers.map(v => `<div style="background:#FAFAFA;border-radius:8px;padding:10px 14px;margin-bottom:8px;font-family:'Courier New',monospace;font-weight:700;font-size:15px;text-align:center;letter-spacing:1px;color:#1E293B;">${v.code}</div>`).join('');
@@ -1040,7 +1229,7 @@ app.post('/api/vouchers/purchase', requireAuth, async (req, res) => {
   res.json(responseBody);
 });
 
-app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
+app.post('/api/vouchers/gift', requireAuth, purchaseLimiter, async (req, res) => {
   const { offerId, recipientEmail, recipientPhone, message, occasion, idempotencyKey } = req.body;
   const cached = checkIdempotency(req.user.id, idempotencyKey);
   if (cached) return res.json(cached);
@@ -1063,11 +1252,20 @@ app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
 
   const merchant = data.merchants.find(m => m.id === offer.merchantId) || {};
 
-  const paymentResult = await paymentProvider.createPayment({
-    amount: offer.price, currency: 'USD', customerId: req.user.id,
-    metadata: { offerId: offer.id, gift: true }
-  });
+  /* F-11: take the stock before the await, hand it back if payment fails. */
+  offer.sold += 1;
+  let paymentResult;
+  try {
+    paymentResult = await paymentProvider.createPayment({
+      amount: money(offer.price), currency: 'USD', customerId: req.user.id,
+      metadata: { offerId: offer.id, gift: true }
+    });
+  } catch (e) {
+    offer.sold -= 1;
+    return res.status(502).json({ error: 'Payment could not be completed. Please try again.' });
+  }
   if (!paymentResult.success) {
+    offer.sold -= 1;
     return res.status(402).json({ error: 'Payment failed. Please try again.' });
   }
 
@@ -1086,7 +1284,6 @@ app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
     commissionRate: commissionRateFor(merchant), paymentTransactionId: paymentResult.transactionId
   };
   data.vouchers.push(voucher);
-  offer.sold += 1;
   db.save();
 
   sendEmail(req.user.email, 'Your Waffer gift purchase confirmation',
@@ -1119,22 +1316,32 @@ app.post('/api/vouchers/gift', requireAuth, async (req, res) => {
       }));
   }
 
-  const responseBody = { voucher, claimed: !!recipient, recipientName: recipient ? recipient.name : null };
+  /* F-04: the sender never needs the code — it goes to the recipient by email.
+     Returning it here is what let a sender spend a gift they had given away. */
+  const { code: _code, id: _id, commissionRate: _cr, paymentTransactionId: _tx, ...giftSafe } = voucher;
+  const responseBody = { voucher: giftSafe, claimed: !!recipient, recipientName: recipient ? recipient.name : null };
   saveIdempotency(req.user.id, idempotencyKey, responseBody);
   res.json(responseBody);
 });
 
-app.get('/api/users/lookup', requireAuth, (req, res) => {
+const lookupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Too many lookups. Please try again later.' }
+});
+/* F-14: this used to return the account holder's real name to any logged-in
+   caller, with no throttle, which made it a bulk email-to-identity service. */
+app.get('/api/users/lookup', requireAuth, lookupLimiter, (req, res) => {
   const email = (req.query.email || '').trim().toLowerCase();
   if (!email) return res.json({ exists: false });
   const user = data.users.find(u => u.email.toLowerCase() === email);
   if (user && user.id === req.user.id) return res.json({ exists: false, isSelf: true });
-  res.json({ exists: !!user, name: user ? user.name : null });
+  res.json({ exists: !!user, name: user ? user.name.split(' ')[0] : null });
 });
 
 app.get('/api/vouchers/mine', requireAuth, (req, res) => {
   const mine = data.vouchers.filter(v => v.ownerId === req.user.id).map(v => ({
     ...v,
+    commissionRate: undefined, paymentTransactionId: undefined,
     hasReviewed: data.reviews.some(r => r.offerId === v.offerId && r.userId === req.user.id)
   }));
   const totalSaved = money(mine.reduce((a, v) => a + Math.max(0, (v.original || v.price) - v.price), 0));
@@ -1142,11 +1349,19 @@ app.get('/api/vouchers/mine', requireAuth, (req, res) => {
 });
 
 app.get('/api/vouchers/sent', requireAuth, (req, res) => {
-  const sent = data.vouchers.filter(v => v.buyerId === req.user.id && v.ownerId !== req.user.id);
+  /* F-04: this returned whole voucher objects, so the sender kept the code and
+     could walk in and spend a gift they had already given away. */
+  const sent = data.vouchers.filter(v => v.buyerId === req.user.id && v.ownerId !== req.user.id)
+    .map(v => ({
+      offerId: v.offerId, offerTitle: v.offerTitle, merchantName: v.merchantName,
+      price: v.price, original: v.original, status: v.status, giftedTo: v.giftedTo,
+      recipientEmail: v.recipientEmail, recipientPhone: v.recipientPhone,
+      expiryDate: v.expiryDate, createdAt: v.createdAt, redeemedAt: v.redeemedAt
+    }));
   res.json({ vouchers: sent });
 });
 
-app.post('/api/vouchers/redeem', requireMerchant, (req, res) => {
+app.post('/api/vouchers/redeem', requireMerchant, redeemLimiter, (req, res) => {
   const { code } = req.body;
   if (!code) return res.status(400).json({ error: 'Enter a voucher code.' });
   const voucher = data.vouchers.find(v => v.code === code.trim().toUpperCase());
@@ -1157,6 +1372,8 @@ app.post('/api/vouchers/redeem', requireMerchant, (req, res) => {
   }
   if (voucher.status === 'redeemed') return res.status(400).json({ error: 'This voucher has already been redeemed.' });
   if (voucher.status === 'pending-claim') return res.status(400).json({ error: 'This voucher has not been claimed by its recipient yet.' });
+  const expiryError = validateVoucherExpiry(voucher);
+  if (expiryError) return res.status(400).json({ error: expiryError });
   const windowError = validateRedemptionWindow(offer);
   if (windowError) return res.status(400).json({ error: windowError });
   voucher.status = 'redeemed';
@@ -1211,7 +1428,10 @@ app.delete('/api/admin/categories/:id', requireAdmin, (req, res) => {
 });
 
 app.get('/api/admin/stats', requireAdmin, (req, res) => {
-  const gmv = data.offers.reduce((a, o) => a + o.sold * o.price, 0);
+  /* F-18: offer.sold x today's price rewrote history on every price edit and
+     disagreed with the finance overview. Vouchers are the only record of what
+     was actually charged. */
+  const gmv = money(data.vouchers.reduce((a, v) => a + v.price, 0));
   const soldCount = data.offers.reduce((a, o) => a + o.sold, 0);
   const redeemed = data.vouchers.filter(v => v.status === 'redeemed').length;
   res.json({ gmv, merchants: data.merchants.length, soldCount, redeemed });
@@ -1236,7 +1456,7 @@ app.post('/api/admin/merchants', requireAdmin, (req, res) => {
   while (data.merchantAccounts.some(a => a.username === username)) { username = base + n; n++; }
   const tempPassword = generatePassword();
   const accountId = db.nextId('merchantAccount');
-  const account = { id: accountId, merchantId: id, role: 'manager', location: null, username, passwordHash: bcrypt.hashSync(tempPassword, 8), plainPassword: tempPassword };
+  const account = { id: accountId, merchantId: id, role: 'manager', location: null, username, passwordHash: bcrypt.hashSync(tempPassword, 10) };
   data.merchantAccounts.push(account);
 
   db.save();
@@ -1275,7 +1495,7 @@ app.patch('/api/admin/merchants/:id', requireAdmin, (req, res) => {
 
 app.get('/api/admin/merchants/:id/accounts', requireAdmin, (req, res) => {
   const merchantId = Number(req.params.id);
-  const accounts = data.merchantAccounts.filter(a => a.merchantId === merchantId).map(a => ({ ...a, passwordHash: undefined }));
+  const accounts = data.merchantAccounts.filter(a => a.merchantId === merchantId).map(a => ({ ...a, passwordHash: undefined, plainPassword: undefined }));
   res.json({ accounts });
 });
 
@@ -1291,7 +1511,7 @@ app.post('/api/admin/merchants/:id/accounts', requireAdmin, (req, res) => {
   while (data.merchantAccounts.some(a => a.username === username)) { username = base + n; n++; }
   const tempPassword = generatePassword();
   const accountId = db.nextId('merchantAccount');
-  const account = { id: accountId, merchantId, role: 'frontdesk', location: location.trim(), username, passwordHash: bcrypt.hashSync(tempPassword, 8), plainPassword: tempPassword };
+  const account = { id: accountId, merchantId, role: 'frontdesk', location: location.trim(), username, passwordHash: bcrypt.hashSync(tempPassword, 10) };
   data.merchantAccounts.push(account);
   db.save();
 
@@ -1326,15 +1546,15 @@ app.patch('/api/admin/merchants/:merchantId/accounts/:accountId', requireAdmin, 
   if (regenerate) {
     newPlainPassword = generatePassword();
   } else if (password && password.trim()) {
-    if (password.trim().length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+    if (password.trim().length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
     newPlainPassword = password.trim();
   }
   if (newPlainPassword) {
-    account.passwordHash = bcrypt.hashSync(newPlainPassword, 8);
-    account.plainPassword = newPlainPassword;
+    account.passwordHash = bcrypt.hashSync(newPlainPassword, 10);
   }
   db.save();
-  res.json({ account: { ...account, passwordHash: undefined } });
+  /* Shown once, in this response only — never stored. */
+  res.json({ account: { ...account, passwordHash: undefined, tempPassword: newPlainPassword || undefined } });
 });
 
 app.delete('/api/admin/merchants/:merchantId/accounts/:accountId', requireAdmin, (req, res) => {
@@ -1434,9 +1654,51 @@ app.get('/api/admin/offers/:id/detail', requireAdmin, (req, res) => {
   res.json({ offer, merchantName: merchant.name, sold, redeemed, revenue, commission, payout, commissionRate: currentRate, vouchers: buyerRows });
 });
 
+/* F-15: the only check used to be that merchant, title and price were truthy,
+   so a negative price, a NaN inventory cap (which silently disabled the cap
+   entirely) or a start date after the expiry date all sailed through and
+   poisoned every figure downstream. */
+function validateOfferInput(b, data, only) {
+  const checking = f => !only || only.has(f);
+  const num = v => (v === undefined || v === null || v === '') ? null : Number(v);
+  const price = num(b.price), original = num(b.original);
+  if (checking('price') && (!Number.isFinite(price) || price <= 0)) return 'Enter a price greater than zero.';
+  if (checking('original') && original !== null && (!Number.isFinite(original) || original < price)) {
+    return 'The original price must be a number and cannot be below the sale price.';
+  }
+  for (const [field, label] of [['maxInventory', 'Inventory limit'], ['perCustomerLimit', 'Per-customer limit']]) {
+    if (!checking(field)) continue;
+    const v = num(b[field]);
+    if (v !== null && (!Number.isInteger(v) || v < 1)) return `${label} must be a whole number of 1 or more.`;
+  }
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  for (const [field, label] of [['startDate', 'Start date'], ['expiryDate', 'Expiry date']]) {
+    if (checking(field) && b[field] && !dateRe.test(b[field])) return `${label} must be in YYYY-MM-DD form.`;
+  }
+  if (b.startDate && b.expiryDate && b.startDate > b.expiryDate) {
+    return 'The offer cannot start after it expires.';
+  }
+  if (checking('redemptionDays') && Array.isArray(b.redemptionDays) && b.redemptionDays.length &&
+      !b.redemptionDays.every(d => Number.isInteger(Number(d)) && Number(d) >= 0 && Number(d) <= 6)) {
+    return 'Redemption days must be whole numbers from 0 (Sunday) to 6.';
+  }
+  const timeRe = /^([01]\d|2[0-3]):[0-5]\d$/;
+  for (const field of ['redemptionHoursFrom', 'redemptionHoursTo']) {
+    if (checking(field) && b[field] && !timeRe.test(String(b[field]))) return 'Redemption hours must be in HH:MM form.';
+  }
+  if (checking('title') && typeof b.title === 'string' && b.title.trim().length > 120) return 'Keep the title under 120 characters.';
+  if (checking('terms') && typeof b.terms === 'string' && b.terms.length > 2000) return 'Keep the terms under 2000 characters.';
+  if (checking('category') && b.category && !data.categories.some(c => c === b.category || c.name === b.category)) {
+    return 'Choose a category that exists.';
+  }
+  return null;
+}
+
 app.post('/api/admin/offers', requireAdmin, (req, res) => {
   const { merchantId, title, category, original, price, terms, expiryDate, startDate, maxInventory, perCustomerLimit, redemptionDays, redemptionHoursFrom, redemptionHoursTo } = req.body;
-  if (!merchantId || !title || !price) return res.status(400).json({ error: 'Merchant, title and price are required.' });
+  if (!merchantId || !title || !String(title).trim() || !price) return res.status(400).json({ error: 'Merchant, title and price are required.' });
+  const offerError = validateOfferInput(req.body, data);
+  if (offerError) return res.status(400).json({ error: offerError });
   const merchant = data.merchants.find(m => m.id === Number(merchantId));
   if (!merchant) return res.status(400).json({ error: 'Merchant not found.' });
   const id = db.nextId('offer');
@@ -1485,9 +1747,29 @@ app.patch('/api/admin/offers/:id', requireAdmin, (req, res) => {
   const offer = data.offers.find(o => o.id === Number(req.params.id));
   if (!offer) return res.status(404).json({ error: 'Offer not found.' });
   const { title, category, original, price, terms, expiryDate, startDate, maxInventory, perCustomerLimit, redemptionDays, redemptionHoursFrom, redemptionHoursTo } = req.body;
+  const merged = {
+    price: price !== undefined ? price : offer.price,
+    original: original !== undefined ? original : offer.original,
+    maxInventory: maxInventory !== undefined ? maxInventory : offer.maxInventory,
+    perCustomerLimit: perCustomerLimit !== undefined ? perCustomerLimit : offer.perCustomerLimit,
+    startDate: startDate !== undefined ? startDate : offer.startDate,
+    expiryDate: expiryDate !== undefined ? expiryDate : offer.expiryDate,
+    redemptionDays: redemptionDays !== undefined ? redemptionDays : offer.redemptionDays,
+    redemptionHoursFrom: redemptionHoursFrom !== undefined ? redemptionHoursFrom : (offer.redemptionHours || {}).from,
+    redemptionHoursTo: redemptionHoursTo !== undefined ? redemptionHoursTo : (offer.redemptionHours || {}).to,
+    title: title !== undefined ? title : offer.title,
+    terms: terms !== undefined ? terms : offer.terms,
+    category: category !== undefined ? category : offer.category
+  };
+  /* Only the submitted fields are judged, plus the start/expiry pair, so an
+     older offer that predates these rules stays editable. */
+  const submitted = new Set(Object.keys(req.body));
+  submitted.add('startDate'); submitted.add('expiryDate');
+  const offerError = validateOfferInput(merged, data, submitted);
+  if (offerError) return res.status(400).json({ error: offerError });
   if (title) offer.title = title;
   if (category) offer.category = category;
-  if (original) offer.original = Number(original);
+  if (original !== undefined && original !== '') offer.original = Number(original);
   if (price) offer.price = Number(price);
   if (terms) offer.terms = terms;
   if (expiryDate !== undefined) offer.expiryDate = expiryDate || null;
@@ -1512,8 +1794,13 @@ app.patch('/api/admin/offers/:id/toggle', requireAdmin, (req, res) => {
 
 /* ---------- Finance ---------- */
 function inRange(ts, from, to) {
-  if (from && ts < new Date(from).getTime()) return false;
-  if (to && ts > new Date(to).getTime() + 24 * 60 * 60 * 1000 - 1) return false;
+  /* F-19: the from/to strings used to parse as UTC midnight while the rest of
+     the app runs on Asia/Beirut, so sales in the first hours of a month were
+     billed to the previous one and the chart stopped summing to the headline.
+     Comparing Beirut date keys keeps both on one clock. */
+  const key = dateKeyInStoreTimezone(ts);
+  if (from && key < from) return false;
+  if (to && key > to) return false;
   return true;
 }
 
@@ -1614,8 +1901,19 @@ app.post('/api/admin/merchants/:id/payouts', requireAdmin, (req, res) => {
   const merchant = data.merchants.find(m => m.id === merchantId);
   if (!merchant) return res.status(404).json({ error: 'Merchant not found.' });
   const { amount, note, method } = req.body;
+  /* F-10: the old guard rejected zero and negatives and stopped there, so a
+     payout could exceed what was owed (driving that merchant negative, which
+     silently understated the total payable across every other merchant), and
+     1e999 passed as Infinity and reloaded as null after the next restart. */
   const amt = Number(amount);
-  if (!amt || amt <= 0) return res.status(400).json({ error: 'Enter a valid payout amount.' });
+  if (!Number.isFinite(amt) || amt < 0.01) return res.status(400).json({ error: 'Enter a valid payout amount.' });
+  const owed = merchantOutstanding(merchantId).outstanding;
+  if (owed <= 0) {
+    return res.status(400).json({ error: 'Nothing is outstanding for this merchant right now.' });
+  }
+  if (amt > owed + 0.01) {
+    return res.status(400).json({ error: `That is more than the $${money(owed)} currently outstanding for this merchant.` });
+  }
   const validMethods = ['Bank transfer', 'Whish', 'Cash', 'Other'];
   const payoutMethod = validMethods.includes(method) ? method : 'Other';
   const id = db.nextId('payout');
@@ -1725,7 +2023,15 @@ app.get('/api/admin/merchants/:id/invoice', requireAdmin, (req, res) => {
     y += 22;
   }
   summaryRow('Total revenue', `$${revenue}`);
-  summaryRow(`Waffer commission (${Math.round(currentRate * 100)}% current rate)`, `-$${commission}`);
+  /* F-17: the amount was always right, but labelling it with the merchant's
+     rate as of today made the statement fail to divide out after any change. */
+  const ratesUsed = [...new Set(vouchers.map(v => typeof v.commissionRate === 'number' ? v.commissionRate : currentRate))];
+  const rateLabel = ratesUsed.length === 0
+    ? `${(currentRate * 100).toFixed(1).replace(/\.0$/, '')}%`
+    : ratesUsed.length === 1
+    ? `${(ratesUsed[0] * 100).toFixed(1).replace(/\.0$/, '')}%`
+    : 'blended rate';
+  summaryRow(`Waffer commission (${rateLabel})`, `-$${commission}`);
   summaryRow('Net payout (this period)', `$${netPayout}`, true);
   y += 8;
   doc.moveTo(300, y).lineTo(545, y).strokeColor('#E7E1F2').stroke();
@@ -1745,23 +2051,57 @@ app.get('/api/admin/merchants/:id/invoice', requireAdmin, (req, res) => {
   doc.end();
 });
 
+/* F-22: with no error middleware, Express served absolute file paths and the
+   failing expression to the client on any unhandled throw. */
+app.use((err, req, res, next) => {
+  console.error('Unhandled error on', req.method, req.originalUrl, '-', err && err.stack ? err.stack : err);
+  if (res.headersSent) return next(err);
+  if (err && err.message === 'Only image files are allowed.') {
+    return res.status(400).json({ error: err.message });
+  }
+  res.status(500).json({ error: 'Something went wrong. Please try again.' });
+});
+
+let server;
 async function start() {
   data = await db.load();
-  app.listen(PORT, () => {
+  server = app.listen(PORT, () => {
     console.log(`Waffer server running on http://localhost:${PORT}`);
   });
 }
-start();
+start().catch(e => {
+  console.error('Failed to start:', e && e.stack ? e.stack : e);
+  process.exit(1);
+});
 
-async function gracefulShutdown(signal) {
+/* F-21: SIGTERM was the only path that flushed, so a crash, an OOM or a
+   SIGKILL dropped every write since the last flush — including purchases whose
+   confirmation email had already gone out. Every exit route flushes now, and
+   the flush cannot hang past Render's kill window. */
+let shuttingDown = false;
+async function gracefulShutdown(signal, code = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log(`${signal} received, flushing pending database writes before shutdown...`);
+  if (server) server.close();
   try {
-    await db.flush();
+    await Promise.race([
+      db.flush(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('flush timed out')), 10000))
+    ]);
     console.log('All writes flushed. Exiting.');
   } catch (e) {
     console.log('Flush error during shutdown:', e.message);
   }
-  process.exit(0);
+  process.exit(code);
 }
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('uncaughtException', e => {
+  console.error('Uncaught exception:', e && e.stack ? e.stack : e);
+  gracefulShutdown('uncaughtException', 1);
+});
+process.on('unhandledRejection', e => {
+  console.error('Unhandled rejection:', e && e.stack ? e.stack : e);
+  gracefulShutdown('unhandledRejection', 1);
+});
